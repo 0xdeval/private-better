@@ -1,0 +1,90 @@
+---
+description: Phase 1 Railgun integration status and implementation notes for Private Better. Use this as handoff context for future agents.
+globs: *
+---
+
+# PHASE 1 STATUS (RAILGUN INTEGRATION)
+
+This repo has completed a working Phase 1 MVP flow on Polygon Amoy:
+
+1. Connect injected wallet (MetaMask/Coinbase compatible detection).
+2. Initialize Railgun engine in browser.
+3. Generate Railgun wallet (`0zk...`) from mnemonic.
+4. Approve USDC to Railgun proxy.
+5. Shield USDC from public wallet to private Railgun wallet.
+
+## CURRENT APP ENTRYPOINTS
+
+- `index.html` loads `src/webcli/entry.ts`.
+- `src/webcli/entry.ts` loads polyfills and web CLI app.
+- `src/webcli/app.ts` implements terminal commands and wallet interactions.
+- `src/railgun/railgunManager.ts` wraps Railgun SDK init + shield logic.
+- `src/railgun/railgunStorage.ts` implements browser DB + artifact storage.
+- `src/railgun/railgunConstants.ts` defines network/rpc/token config.
+
+## COMMANDS (WEB CLI)
+
+- `help`
+- `show-config`
+- `set-rpc <rpc-url>`
+- `set-usdc <token-address>`
+- `connect`
+- `init-railgun`
+- `generate-wallet [mnemonic]`
+- `approve-usdc <amount>`
+- `shield-usdc <0zkAddress> <amount>`
+
+`generate-wallet` uses `VITE_RAILGUN_TEST_MNEMONIC` automatically if no mnemonic argument is passed.
+
+## ENV VARS
+
+Expected in `.env` for local MVP testing:
+
+- `VITE_RAILGUN_RPC`
+- `VITE_USDC_AMOY`
+- `VITE_RAILGUN_TEST_MNEMONIC` (test only; never for real funds)
+
+## CRITICAL IMPLEMENTATION NOTES
+
+1. Vite + polyfills are required for Railgun browser compatibility.
+2. Railgun dependencies include CJS + WASM; dep optimization must stay configured.
+3. `@railgun-community/shared-models@7.6.1` has Polygon Amoy V3 addresses as empty strings.
+4. Runtime workaround in `railgunManager.ts` disables V3 on Amoy if V3 addresses are missing.
+5. Some RPC providers fail Railgun init due batch request limits.
+
+## KNOWN WORKING/FAILING CONDITIONS
+
+- `https://polygon-amoy.drpc.org` free tier can fail (`Batch of more than 3 requests are not allowed`).
+- Use an RPC endpoint that supports JSON-RPC batching for Railgun init.
+- If wallet connect fails with provider injection errors, disable conflicting wallet extensions and retry.
+
+## FRONTEND/BUILD SETTINGS
+
+- Package manager: Bun.
+- Dev server: Vite on port `3017`.
+- `package.json` uses:
+  - `dev:web`: `bunx --bun vite --force --port 3017 --strictPort`
+  - `build:web`: `bunx --bun vite build`
+  - `typecheck`: `tsc --noEmit`
+
+## PHASE 2 HANDOFF (NEXT)
+
+Implement contracts with mock-first approach:
+
+1. `MockAzuro` and minimal Railgun callback/shield interfaces.
+2. `PrivateBetAdapter.placePrivateBet`:
+   - Called by Railgun unshield callback.
+   - Decode bet payload.
+   - Approve USDC and call Azuro mock bet.
+   - Store bet ownership mapping to zk owner identifier.
+3. `PrivateBetAdapter.redeemWin`:
+   - Claim winnings from Azuro.
+   - Immediately shield back to user zk address.
+4. Write tests for happy path + revert path + access restriction.
+
+## DO NOT REGRESS
+
+1. Do not remove Vite dep optimization/polyfill setup for Railgun deps.
+2. Do not assume user public EOA and Railgun mnemonic are the same identity.
+3. Do not hard-fail on Polygon Amoy V3 empty address config.
+4. Keep MVP flow simple and unblock-first.

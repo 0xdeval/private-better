@@ -1,0 +1,3 @@
+import './polyfills';
+import './app';
+

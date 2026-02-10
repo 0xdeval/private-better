@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Private Better CLI</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #141b23;
+        --line: #223042;
+        --text: #e6edf3;
+        --muted: #8b9db2;
+        --ok: #4cd964;
+        --err: #ff5d73;
+        --accent: #3aa0ff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+        background: radial-gradient(circle at 20% 0%, #1a2533 0, var(--bg) 35%);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 24px;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: linear-gradient(180deg, #131a24 0%, #0f141b 100%);
+        overflow: hidden;
+      }
+      .head {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        display: flex;
+        gap: 12px;
+      }
+      .dot { width: 10px; height: 10px; border-radius: 999px; background: var(--accent); }
+      .terminal {
+        height: 68vh;
+        overflow: auto;
+        padding: 14px 16px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.45;
+      }
+      .line-muted { color: var(--muted); }
+      .line-ok { color: var(--ok); }
+      .line-err { color: var(--err); }
+      .prompt {
+        border-top: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: auto 1fr;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+      }
+      .prefix { color: var(--accent); }
+      input {
+        border: none;
+        outline: none;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="head"><span class="dot"></span>private-better web-cli</div>
+      <div id="terminal" class="terminal"></div>
+      <label class="prompt">
+        <span class="prefix">pb&gt;</span>
+        <input id="cli-input" autocomplete="off" spellcheck="false" />
+      </label>
+    </div>
+    <script>
+      window.__APP_CONFIG__ = {
+        RAILGUN_RPC: localStorage.getItem('pb.rpc') || 'https://rpc-amoy.polygon.technology',
+        USDC_AMOY: localStorage.getItem('pb.usdc') || '0xYOUR_USDC_AMOY_ADDRESS',
+      };
+    </script>
+    <script type="module" src="/src/webcli/entry.ts"></script>
+  </body>
+</html>
