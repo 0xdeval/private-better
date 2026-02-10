@@ -1,0 +1,100 @@
+---
+description: Phase 2 smart-contract context for Private Better. Use this to continue contract and integration work without re-discovery.
+globs: *
+---
+
+# PHASE 2 CONTEXT (CONTRACTS)
+
+Phase 2 objective:
+
+- Build and validate `Atomic Unshield -> Bet -> Claim -> Shield` contract flow.
+
+Status:
+
+1. Phase 2 mock-first contracts are implemented.
+2. Foundry tests pass.
+3. On-chain smoke test on Amoy passes with deployed mocks.
+
+## CONTRACTS CREATED
+
+1. `contracts/PrivateBetAdapter.sol`
+- Core adapter contract.
+- Entry:
+  - `onRailgunUnshield(address token, uint256 amount, bytes data)` (callback-like entrypoint)
+  - `redeemWin(uint256 betTokenId)`
+- Stores:
+  - `positions[betTokenId] = { zkOwnerHash, token, stake, claimed }`
+- Config:
+  - `railgunCallbackSender`
+  - `railgunShield`
+  - `azuro`
+  - `usdc`
+- Access:
+  - `onlyRailgunCallback` guard on unshield callback entry.
+
+2. `contracts/mocks/MockAzuro.sol`
+- Simulates betting protocol:
+  - place, settle, claim, claimable, payout.
+
+3. `contracts/mocks/MockRailgun.sol`
+- Simulates railgun behavior:
+  - unshield callback trigger
+  - shield payout receive.
+
+4. `contracts/mocks/MockUSDC.sol`
+- Minimal 6-decimal ERC20 for tests.
+
+5. `contracts/test/PrivateBetAdapter.t.sol`
+- Core tests:
+  - happy path
+  - callback access control
+  - redeem-before-settlement revert.
+
+## DEPLOYMENT + SMOKE SCRIPTS
+
+Implemented scripts:
+
+1. `scripts/deploy-mock-azuro.sh`
+2. `scripts/deploy-mock-railgun.sh`
+3. `scripts/deploy-private-bet-adapter.sh`
+4. `scripts/smoke-test-adapter.sh`
+
+Smoke script validates deployed flow end-to-end on Amoy using deployed mocks.
+
+## IMPORTANT ENV VARS
+
+Required for contract deployment/testing:
+
+- `AMOY_RPC_URL`
+- `DEPLOYER_PRIVATE_KEY`
+- `AMOY_USDC`
+- `AMOY_AZURO_ADAPTER`
+- `AMOY_MOCK_RAILGUN`
+- `AMOY_PRIVATE_BET_ADAPTER`
+
+Also used in adapter deploy:
+
+- `AMOY_RAILGUN_CALLBACK_SENDER`
+- `AMOY_RAILGUN_SHIELD`
+
+## KNOWN LIMITATIONS
+
+1. Current adapter interface to Azuro is simplified (`IAzuro` mock shape), not real Azuro production interface.
+2. Current shield interface is mock shape (`shield(address,uint256,bytes32)`), not full real Railgun shield request type.
+3. Real integration still required for:
+- Azuro wrapper contract (`AzuroAdapter`) against live Azuro contracts.
+- Frontend Railgun tx composition for unshield + external contract call.
+
+## NEXT STEPS (PHASE 3/4 HANDOFF)
+
+1. Build `AzuroAdapter.sol` that implements current `IAzuro` interface and forwards to real Azuro contracts on Amoy.
+2. Re-point `PrivateBetAdapter.azuro` to deployed real `AzuroAdapter`.
+3. Update shield path to real Railgun-compatible call shape.
+4. Implement frontend construction of Railgun transaction with cross-contract call payload targeting `onRailgunUnshield`.
+
+## DO NOT REGRESS
+
+1. Keep mock scripts working for reproducible smoke testing.
+2. Keep `onlyRailgunCallback` restriction intact.
+3. Keep `positions` mapping semantics stable (`betTokenId -> zkOwnerHash`).
+4. Preserve script-safe dotenv parsing (mnemonic values can contain spaces).
