@@ -1,226 +1,205 @@
-# PrivateBet Contracts (Phase 2)
+# Private Supply Contracts (Junior-Friendly Guide)
 
-This folder contains the Phase 2 smart-contract layer for the hackathon MVP.
+This folder contains the smart-contract side of the private supply MVP:
 
-Goal:
+1. User holds private balance in Railgun.
+2. Railgun unshields to adapter.
+3. Adapter supplies into Aave through a user vault.
+4. Later, adapter withdraws from Aave and shields back to private destination.
 
-- Validate the atomic private betting flow with mocks on Polygon Amoy before integrating real Azuro and real Railgun cross-contract calls.
+## 1) Mental Model
 
-## User-Friendly Overview
+Think about this system as three layers:
 
-Short version:
+1. Entry layer: `PrivateSupplyAdapter` receives unshield callbacks.
+2. Isolation layer: `VaultFactory` creates one `UserVault` per private owner hash.
+3. Strategy layer: `UserVault` talks to Aave Pool.
 
-1. `PrivateBetAdapter` is the real custom contract for this project.
-2. `MockAzuro` is a temporary fake betting protocol used only for testing.
-3. `MockRailgun` is a temporary fake Railgun endpoint used only for testing.
+Why this design:
 
-What happens in the tested flow:
+1. A vault is shared per `zkOwnerHash`, so one private user has one isolated strategy account.
+2. Position bookkeeping stays inside adapter (`positionId -> vault/token/amount`).
+3. Railgun addresses stay private; contracts only store hash-like identifiers.
 
-1. `MockRailgun` sends USDC to `PrivateBetAdapter` and triggers callback.
-2. `PrivateBetAdapter` places a bet in `MockAzuro`.
-3. Adapter stores ownership as `zkOwnerHash` (private identity mapping), not public wallet identity.
-4. When bet is settled as win, adapter claims payout.
-5. Adapter sends payout back to Railgun shield target.
+## 2) Contracts and Their Job
 
-What will be replaced later:
+1. `contracts/PrivateSupplyAdapter.sol`
+- Main orchestrator.
+- `onRailgunUnshield(token, amount, data)`:
+  - validates callback sender,
+  - decodes `SupplyRequest { zkOwnerHash }`,
+  - gets user vault from factory,
+  - transfers token to vault,
+  - calls vault supply,
+  - stores a new position.
+- `withdrawAndShield(positionId, amount, shieldToZkAddressHash)`:
+  - withdraws from vault/Aave,
+  - updates position amount,
+  - approves shield contract,
+  - calls `railgunShield.shield(...)`.
 
-1. `MockRailgun` -> real Railgun/RelayAdapt integration.
-2. `MockAzuro` -> real Azuro integration (via adapter/wrapper).
+2. `contracts/VaultFactory.sol`
+- Mapping: `zkOwnerHash => vault`.
+- `getOrCreateVault` creates vault only once per private owner hash.
 
-What remains as project core:
+3. `contracts/UserVault.sol`
+- Callable only by adapter.
+- `supply(...)` approves Aave Pool and calls `Pool.supply`.
+- `withdrawToAdapter(...)` calls `Pool.withdraw` back to adapter.
 
-1. `PrivateBetAdapter` stays as the main product contract logic.
+4. `contracts/interfaces/IAavePool.sol`
+- Minimal Aave interface used by vault.
 
-## What These Contracts Do
+5. `contracts/mocks/MockAavePool.sol`
+- Deterministic local/test behavior for supply/withdraw accounting.
 
-1. `PrivateBetAdapter.sol`
+6. `contracts/mocks/MockRailgun.sol`
+- Mock callback sender and mock shield endpoint.
 
-- Main adapter contract for the private bet flow.
-- Accepts callback-style unshield input (`onRailgunUnshield`), places a bet, and stores ownership mapping by `zkOwnerHash`.
-- On `redeemWin`, claims payout from Azuro and calls `shield(...)` back to Railgun target.
+7. `contracts/mocks/MockUSDC.sol`
+- 6-decimal test token for local/mock flow.
 
-2. `mocks/MockAzuro.sol`
+8. `contracts/test/PrivateSupplyAdapter.t.sol`
+- Core unit tests:
+  - supply flow,
+  - callback access control,
+  - withdraw + shield flow,
+  - withdraw access control.
 
-- Simplified Azuro-like contract.
-- Supports `placeBet`, `settleBet`, `isClaimable`, `claim`, `seedLiquidity`.
+## 3) End-to-End Behavior
 
-3. `mocks/MockRailgun.sol`
+### Supply path
 
-- Simplified Railgun-like contract for testing.
-- Supports `unshieldToAdapter` and `shield`.
+1. Adapter receives `onRailgunUnshield`.
+2. Adapter gets vault from factory.
+3. Adapter sends token to vault.
+4. Vault supplies to Aave.
+5. Adapter creates position.
 
-4. `mocks/MockUSDC.sol`
+### Withdraw path
 
-- Minimal ERC20 (6 decimals) for local/mock test flows.
+1. Owner calls `withdrawAndShield(positionId, amount, shieldHash)`.
+2. Adapter resolves position and caps amount to position size when `amount=max`.
+3. Vault withdraws from Aave back to adapter.
+4. Adapter calls shield contract with withdrawn token.
+5. Adapter reduces stored position amount.
 
-5. `interfaces/*`
-
-- `IAzuro`, `IRailgunShield`, `IPrivateBetAdapter`, `IERC20`.
-
-6. `test/PrivateBetAdapter.t.sol`
-
-- Foundry test suite for Phase 2 behavior.
-
-## Current Status
-
-Implemented and validated:
-
-1. Local unit/integration tests via Foundry pass.
-2. On-chain mock smoke test on Amoy passes.
-3. Deployed contracts can execute:
-
-- `onRailgunUnshield -> placeBet -> settle -> redeemWin -> shield`
-
-Not yet implemented:
-
-1. Real Azuro wrapper (`AzuroAdapter`) over production Azuro contracts.
-2. Real Railgun cross-contract unshield transaction from frontend.
-3. Real Railgun shield request struct integration (current on-chain smoke uses `MockRailgun`).
-
-## Prerequisites
-
-1. Foundry installed (`forge`, `cast`).
-2. Bun installed (used by smoke script to encode payload).
-3. `.env` with at least:
+## 4) Required .env Keys
 
 ```env
-AMOY_RPC_URL=https://rpc-amoy.polygon.technology
-DEPLOYER_PRIVATE_KEY=0x...
-AMOY_USDC=0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582
+RPC_URL=
+DEPLOYER_PRIVATE_KEY=
+
+SUPPLY_TOKEN=
+AAVE_POOL=
+
+PRIVATE_SUPPLY_ADAPTER=
+VAULT_FACTORY=
+
+RAILGUN_CALLBACK_SENDER=
+RAILGUN_SHIELD=
+
+MOCK_AAVE_POOL=
+MOCK_RAILGUN=
 ```
 
-## Quick Start (Step by Step)
+Notes:
 
-Run from project root.
+1. Scripts support legacy `AMOY_*` keys as fallback.
+2. For real Arbitrum Sepolia tests, use Arbitrum Sepolia addresses.
+3. `SUPPLY_TOKEN` must be an asset listed in the selected `AAVE_POOL`.
 
-### Step 1: Run local tests
+## 5) Reproduce Everything
+
+### A) Compile
 
 ```bash
-forge test -vv
+forge build
 ```
 
-Expected:
-
-- 3 tests passing in `contracts/test/PrivateBetAdapter.t.sol`
-
-### Step 2: Deploy `MockAzuro` to Amoy
+### B) Deploy contracts
 
 ```bash
-bash scripts/deploy-mock-azuro.sh
+bash scripts/deploy-vault-factory.sh
+bash scripts/deploy-private-supply-adapter.sh
 ```
 
-Copy output:
-
-- `AMOY_AZURO_ADAPTER=0x...` into `.env`
-
-### Step 3: Deploy `MockRailgun` to Amoy
+Optional mocks:
 
 ```bash
+bash scripts/deploy-mock-aave-pool.sh
 bash scripts/deploy-mock-railgun.sh
 ```
 
-Copy output:
-
-- `AMOY_MOCK_RAILGUN=0x...` into `.env`
-
-### Step 4: Deploy `PrivateBetAdapter` to Amoy
-
-Before running, make sure `.env` contains:
-
-```env
-AMOY_RAILGUN_CALLBACK_SENDER=0x...
-AMOY_RAILGUN_SHIELD=0x...
-AMOY_AZURO_ADAPTER=0x...
-AMOY_USDC=0x...
-```
-
-Deploy:
+### C) Smoke test supply
 
 ```bash
-bash scripts/deploy-private-bet-adapter.sh
+SMOKE_STAKE_AMOUNT=1000000 bash scripts/smoke-test-supply-adapter.sh
 ```
 
-Copy output:
+What success looks like:
 
-- `AMOY_PRIVATE_BET_ADAPTER=0x...` into `.env`
+1. Step 4 (`onRailgunUnshield`) succeeds.
+2. Position is created.
+3. Vault address is printed.
 
-### Step 5: Configure adapter for smoke mode
+### D) Smoke test withdraw + shield
 
-For manual smoke testing, callback sender should be your deployer EOA and shield target should be `MockRailgun`.
+Recommended:
 
 ```bash
-set -a; source .env; set +a
-
-cast send "$AMOY_PRIVATE_BET_ADAPTER" "setRailgunCallbackSender(address)" "$(cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY")" \
-  --rpc-url "$AMOY_RPC_URL" --private-key "$DEPLOYER_PRIVATE_KEY"
-
-cast send "$AMOY_PRIVATE_BET_ADAPTER" "setRailgunShield(address)" "$AMOY_MOCK_RAILGUN" \
-  --rpc-url "$AMOY_RPC_URL" --private-key "$DEPLOYER_PRIVATE_KEY"
+SMOKE_STAKE_AMOUNT=1000000 \
+SMOKE_WITHDRAW_AMOUNT=max \
+SMOKE_SET_SHIELD_TO_MOCK=true \
+bash scripts/smoke-test-withdraw-supply-adapter.sh
 ```
 
-### Step 6: Run on-chain smoke test
+What success looks like:
 
-```bash
-SMOKE_STAKE_AMOUNT=1000000 SMOKE_PAYOUT_AMOUNT=1000000 bash scripts/smoke-test-adapter.sh
-```
+1. Step 6 (`withdrawAndShield`) succeeds.
+2. Position amount becomes `0` (for full withdraw).
+3. Mock railgun token balance increases by withdrawn amount.
 
-`1000000` means `1.0` USDC (6 decimals).
+## 6) Arbitrum Sepolia (Real Aave) Checklist
 
-Expected end state:
+Before running real-Aave smoke tests:
 
-1. Script prints `Smoke test completed.`
-2. Position for bet token id shows `claimed = true`.
+1. `AAVE_POOL` is Arbitrum Sepolia pool.
+2. `SUPPLY_TOKEN` is an underlying reserve listed in that pool.
+3. Deployer wallet has Arb Sepolia ETH for gas.
+4. Deployer wallet has enough `SUPPLY_TOKEN` balance.
 
-## Scripts Reference
+If using real Aave + mock shield, keep:
 
-1. `scripts/deploy-mock-azuro.sh`
+1. `SMOKE_SET_SHIELD_TO_MOCK=true`
+2. `MOCK_RAILGUN=<Arbitrum Sepolia mock railgun address>`
 
-- Deploys `MockAzuro`.
-- Prints `AMOY_AZURO_ADAPTER=...`.
+## 7) Common Errors and Fixes
 
-2. `scripts/deploy-mock-railgun.sh`
+1. `execution reverted: 51`
+- Meaning: Aave reserve supply cap issue.
+- Fix: choose another reserve or another testnet market with headroom.
 
-- Deploys `MockRailgun`.
-- Prints `AMOY_MOCK_RAILGUN=...`.
+2. `adapter supplyToken() does not match SUPPLY_TOKEN`
+- Meaning: `.env` token and adapter config differ.
+- Fix: call `setSupplyToken` on adapter.
 
-3. `scripts/deploy-private-bet-adapter.sh`
+3. `onRailgunUnshield` access control revert
+- Meaning: caller is not current `railgunCallbackSender`.
+- Fix: for smoke tests, temporarily set callback sender to deployer.
 
-- Deploys `PrivateBetAdapter` with constructor args from `.env`.
-- Prints `AMOY_PRIVATE_BET_ADAPTER=...`.
+4. Withdraw revert with shared vault history
+- Meaning: requested withdraw not aligned with this position amount.
+- Fix: use `SMOKE_WITHDRAW_AMOUNT=max` with latest adapter logic.
 
-4. `scripts/smoke-test-adapter.sh`
+## 8) Current Scope vs Next
 
-- Executes end-to-end on-chain mock validation.
-- Includes pre-checks and optional config restore.
+Completed:
 
-Optional smoke knobs:
+1. Real Aave supply path through adapter + factory + vault.
+2. Withdraw from Aave and shield call path.
 
-- `SMOKE_MARKET_ID` default `101`
-- `SMOKE_OUTCOME` default `1`
-- `SMOKE_MIN_ODDS` default `100`
-- `SMOKE_STAKE_AMOUNT` default `100000000` (100 USDC)
-- `SMOKE_PAYOUT_AMOUNT` default `170000000` (170 USDC)
-- `SMOKE_ZK_OWNER_LABEL` default `zk-owner-smoke`
-- `SMOKE_SET_CALLBACK_TO_DEPLOYER` default `true`
-- `SMOKE_SET_SHIELD_TO_DEPLOYER` default `false`
-- `SMOKE_RESTORE_CONFIG` default `true`
+Next:
 
-## Common Errors
-
-1. `ERC20: transfer amount exceeds balance`
-
-- Deployer does not have enough USDC for stake + liquidity seed.
-- Lower `SMOKE_STAKE_AMOUNT` / `SMOKE_PAYOUT_AMOUNT`.
-
-2. `execution reverted` on `redeemWin`
-
-- `railgunShield` points to EOA or wrong contract.
-- Set it to `AMOY_MOCK_RAILGUN` for smoke test.
-
-3. `No injected wallet found`
-
-- Browser wallet extension issue (frontend phase, not contract phase).
-
-## Security Note
-
-Never use real private keys or real mnemonic for production funds in this MVP setup.
+1. Full end-to-end Railgun integration (real callback sender + real shield).
+2. Frontend commands for private supply/withdraw transaction construction.

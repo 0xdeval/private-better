@@ -20,6 +20,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@bgd-labs/aave-address-book": "^4.44.15",
     "@railgun-community/shared-models": "7.6.1",
     "@railgun-community/wallet": "10.4.0",
     "@types/snarkjs": "^0.7.9",

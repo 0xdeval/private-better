@@ -41,7 +41,7 @@ This repo has completed a working Phase 1 MVP flow on Polygon Amoy:
 Expected in `.env` for local MVP testing:
 
 - `VITE_RAILGUN_RPC`
-- `VITE_USDC_AMOY`
+- `VITE_USDC_ADDRESS` (legacy fallback: `VITE_USDC_AMOY`)
 - `VITE_RAILGUN_TEST_MNEMONIC` (test only; never for real funds)
 
 ## CRITICAL IMPLEMENTATION NOTES
@@ -67,20 +67,18 @@ Expected in `.env` for local MVP testing:
   - `build:web`: `bunx --bun vite build`
   - `typecheck`: `tsc --noEmit`
 
-## PHASE 2 HANDOFF (NEXT)
+## PHASE 2 HANDOFF (UPDATED)
 
-Implement contracts with mock-first approach:
+Implement contracts with mock-first private supply approach:
 
-1. `MockAzuro` and minimal Railgun callback/shield interfaces.
-2. `PrivateBetAdapter.placePrivateBet`:
+1. `MockAavePool` and minimal Railgun callback/shield interfaces.
+2. `PrivateSupplyAdapter.onRailgunUnshield`:
    - Called by Railgun unshield callback.
-   - Decode bet payload.
-   - Approve USDC and call Azuro mock bet.
-   - Store bet ownership mapping to zk owner identifier.
-3. `PrivateBetAdapter.redeemWin`:
-   - Claim winnings from Azuro.
-   - Immediately shield back to user zk address.
-4. Write tests for happy path + revert path + access restriction.
+   - Decode supply payload (`zkOwnerHash`).
+   - Route funds to per-user vault and call Aave supply.
+3. `VaultFactory` + `UserVault`:
+   - One vault per `zkOwnerHash` for user isolation.
+4. Write tests for happy path + callback access restriction.
 
 ## DO NOT REGRESS
 

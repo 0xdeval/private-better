@@ -1,7 +1,7 @@
 import { BrowserProvider, Contract, parseUnits } from 'ethers';
 import { NETWORK_CONFIG } from '@railgun-community/shared-models';
 import { RailgunManager } from '../railgun/railgunManager';
-import { TEST_NETWORK, USDC_AMOY } from '../railgun/railgunConstants';
+import { TEST_NETWORK, TEST_RPC_URL, TEST_USDC_ADDRESS } from '../railgun/railgunConstants';
 
 type LineType = 'normal' | 'ok' | 'err' | 'muted';
 
@@ -35,21 +35,22 @@ const ERC20_ABI = [
   'function balanceOf(address owner) external view returns (uint256)',
 ] as const;
 
-const AMOY_CHAIN_ID_HEX = '0x13882';
+const TEST_CHAIN = NETWORK_CONFIG[TEST_NETWORK];
+const TEST_CHAIN_ID_HEX = `0x${TEST_CHAIN.chain.id.toString(16)}`;
 const USDC_DECIMALS = 6;
 const DEFAULT_TEST_MNEMONIC =
   (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
     ?.VITE_RAILGUN_TEST_MNEMONIC;
-const AMOY_CHAIN_PARAMS = {
-  chainId: AMOY_CHAIN_ID_HEX,
-  chainName: 'Polygon Amoy',
+const TEST_CHAIN_PARAMS = {
+  chainId: TEST_CHAIN_ID_HEX,
+  chainName: TEST_CHAIN.publicName,
   nativeCurrency: {
-    name: 'POL',
-    symbol: 'POL',
+    name: TEST_CHAIN.baseToken.symbol,
+    symbol: TEST_CHAIN.baseToken.symbol,
     decimals: 18,
   },
-  rpcUrls: ['https://rpc-amoy.polygon.technology'],
-  blockExplorerUrls: ['https://amoy.polygonscan.com'],
+  rpcUrls: [TEST_RPC_URL || 'https://rpc.sepolia.org'],
+  blockExplorerUrls: ['https://sepolia.etherscan.io'],
 };
 
 class WebCLI {
@@ -169,23 +170,23 @@ class WebCLI {
     return { provider, signerAddress, providerLabel: this.getProviderLabel(eth) };
   }
 
-  private async ensureAmoy() {
+  private async ensureTestNetwork() {
     const eth = this.getEthereumProvider();
     try {
       await eth.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: AMOY_CHAIN_ID_HEX }],
+        params: [{ chainId: TEST_CHAIN_ID_HEX }],
       });
     } catch (error) {
       const rpcError = error as EthereumRpcError;
       if (rpcError.code === 4902) {
         await eth.request({
           method: 'wallet_addEthereumChain',
-          params: [AMOY_CHAIN_PARAMS],
+          params: [TEST_CHAIN_PARAMS],
         });
         await eth.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: AMOY_CHAIN_ID_HEX }],
+          params: [{ chainId: TEST_CHAIN_ID_HEX }],
         });
         return;
       }
@@ -242,7 +243,7 @@ class WebCLI {
           this.showConfig();
           return;
         case 'connect': {
-          await this.ensureAmoy();
+          await this.ensureTestNetwork();
           const { signerAddress, providerLabel } = await ctx.getSigner();
           ctx.write(`Connected wallet (${providerLabel}): ${signerAddress}`, 'ok');
           return;
@@ -274,8 +275,8 @@ class WebCLI {
         case 'status':
           this.write('Commands ready: wallet connect, railgun init, approve, shield.', 'ok');
           return;
-        case 'bet-mock':
-          this.write('Placeholder: future Azuro bet command will plug in here.', 'muted');
+        case 'supply-mock':
+          this.write('Placeholder: future private supply command will plug in here.', 'muted');
           return;
         default:
           this.write(`Unknown command: ${cmd}. Type help.`, 'err');
@@ -297,7 +298,7 @@ class WebCLI {
     this.write('approve-usdc <amount>   e.g. approve-usdc 1.5');
     this.write('shield-usdc <0zkAddress> <amount>   e.g. shield-usdc 0zk... 1.5');
     this.write('status');
-    this.write('bet-mock');
+    this.write('supply-mock');
   }
 
   private setRpc(rpc: string | undefined) {
@@ -310,13 +311,23 @@ class WebCLI {
   private setUsdc(token: string | undefined) {
     if (!token) throw new Error('Usage: set-usdc <usdc-address>');
     localStorage.setItem('pb.usdc', token);
-    this.setAppConfig({ USDC_AMOY: token });
+    this.setAppConfig({ USDC_ADDRESS: token });
     this.write(`USDC updated: ${token}`, 'ok');
   }
 
-  private setAppConfig(next: { RAILGUN_RPC?: string; USDC_AMOY?: string }) {
+  private setAppConfig(next: {
+    RAILGUN_RPC?: string;
+    USDC_ADDRESS?: string;
+    USDC_SEPOLIA?: string;
+    USDC_AMOY?: string;
+  }) {
     const win = window as Window & {
-      __APP_CONFIG__?: { RAILGUN_RPC?: string; USDC_AMOY?: string };
+      __APP_CONFIG__?: {
+        RAILGUN_RPC?: string;
+        USDC_ADDRESS?: string;
+        USDC_SEPOLIA?: string;
+        USDC_AMOY?: string;
+      };
     };
     win.__APP_CONFIG__ = {
       ...win.__APP_CONFIG__,
@@ -328,27 +339,32 @@ class WebCLI {
     const network = NETWORK_CONFIG[TEST_NETWORK];
     this.write(`network: ${TEST_NETWORK} (${network.chain.id})`);
     this.write(`rpc: ${this.getConfig().RAILGUN_RPC ?? '(unset)'}`);
-    this.write(`usdc: ${USDC_AMOY}`);
+    this.write(`usdc: ${TEST_USDC_ADDRESS}`);
     this.write(`railgunProxy: ${network.proxyContract}`);
   }
 
   private getConfig() {
     const win = window as Window & {
-      __APP_CONFIG__?: { RAILGUN_RPC?: string; USDC_AMOY?: string };
+      __APP_CONFIG__?: {
+        RAILGUN_RPC?: string;
+        USDC_ADDRESS?: string;
+        USDC_SEPOLIA?: string;
+        USDC_AMOY?: string;
+      };
     };
     return win.__APP_CONFIG__ ?? {};
   }
 
   private async approveUSDC(ctx: CommandContext, amountText: string | undefined) {
     if (!amountText) throw new Error('Usage: approve-usdc <amount>');
-    await this.ensureAmoy();
+    await this.ensureTestNetwork();
     const { provider } = await ctx.getSigner();
     const signer = await provider.getSigner();
 
     const amount = parseUnits(amountText, USDC_DECIMALS);
     const proxy = NETWORK_CONFIG[TEST_NETWORK].proxyContract;
 
-    const usdc = new Contract(USDC_AMOY, ERC20_ABI, signer) as any;
+    const usdc = new Contract(TEST_USDC_ADDRESS, ERC20_ABI, signer) as any;
     const tx = await usdc.approve(proxy, amount);
     ctx.write(`Approve submitted: ${tx.hash}`);
     await tx.wait();
@@ -364,7 +380,7 @@ class WebCLI {
       throw new Error('Usage: shield-usdc <0zkAddress> <amount>');
     }
 
-    await this.ensureAmoy();
+    await this.ensureTestNetwork();
     const { provider } = await ctx.getSigner();
     const signer = await provider.getSigner();
     const amount = parseUnits(amountText, USDC_DECIMALS);

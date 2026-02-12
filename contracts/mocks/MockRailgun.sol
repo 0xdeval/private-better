@@ -2,19 +2,19 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "../interfaces/IERC20.sol";
-import {IPrivateBetAdapter} from "../interfaces/IPrivateBetAdapter.sol";
+import {IPrivateSupplyAdapter} from "../interfaces/IPrivateSupplyAdapter.sol";
 import {IRailgunShield} from "../interfaces/IRailgunShield.sol";
 import {Ownable} from "../utils/Ownable.sol";
 
 contract MockRailgun is IRailgunShield, Ownable {
-  IPrivateBetAdapter public adapter;
+  IPrivateSupplyAdapter public adapter;
 
   event AdapterUpdated(address indexed adapter);
   event UnshieldToAdapter(
     address indexed token,
     uint256 amount,
     bytes data,
-    uint256 indexed betTokenId
+    uint256 indexed positionId
   );
   event ShieldedToPrivate(
     address indexed token,
@@ -25,7 +25,7 @@ contract MockRailgun is IRailgunShield, Ownable {
 
   function setAdapter(address adapter_) external onlyOwner {
     require(adapter_ != address(0), "MockRailgun: zero adapter");
-    adapter = IPrivateBetAdapter(adapter_);
+    adapter = IPrivateSupplyAdapter(adapter_);
     emit AdapterUpdated(adapter_);
   }
 
@@ -39,14 +39,14 @@ contract MockRailgun is IRailgunShield, Ownable {
     address token,
     uint256 amount,
     bytes calldata data
-  ) external onlyOwner returns (uint256 betTokenId) {
+  ) external onlyOwner returns (uint256 positionId) {
     require(address(adapter) != address(0), "MockRailgun: adapter not set");
     require(token != address(0), "MockRailgun: zero token");
     require(amount > 0, "MockRailgun: zero amount");
 
     require(IERC20(token).transfer(address(adapter), amount), "MockRailgun: unshield transfer failed");
-    betTokenId = adapter.onRailgunUnshield(token, amount, data);
-    emit UnshieldToAdapter(token, amount, data, betTokenId);
+    positionId = adapter.onRailgunUnshield(token, amount, data);
+    emit UnshieldToAdapter(token, amount, data, positionId);
   }
 
   function shield(address token, uint256 amount, bytes32 zkAddressHash) external {

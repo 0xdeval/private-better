@@ -1,9 +1,12 @@
 import { NetworkName } from '@railgun-community/shared-models';
 
-export const TEST_NETWORK = NetworkName.PolygonAmoy;
+export const TEST_NETWORK = NetworkName.EthereumSepolia;
 
 type RuntimeConfig = {
   RAILGUN_RPC?: string;
+  USDC_ADDRESS?: string;
+  USDC_SEPOLIA?: string;
+  USDC_TESTNET?: string;
   USDC_AMOY?: string;
 };
 
@@ -15,6 +18,13 @@ const runtimeConfig =
 
 export const TEST_RPC_URL = env?.VITE_RAILGUN_RPC ?? runtimeConfig?.RAILGUN_RPC ?? '';
 
-// Replace with official USDC token address deployed on Polygon Amoy.
-export const USDC_AMOY =
-  env?.VITE_USDC_AMOY ?? runtimeConfig?.USDC_AMOY ?? '0xYOUR_USDC_AMOY_ADDRESS';
+// Preferred var is VITE_USDC_ADDRESS; older chain-specific keys are fallback only.
+export const TEST_USDC_ADDRESS =
+  env?.VITE_USDC_ADDRESS ??
+  env?.VITE_USDC_SEPOLIA ??
+  env?.VITE_USDC_AMOY ??
+  runtimeConfig?.USDC_ADDRESS ??
+  runtimeConfig?.USDC_SEPOLIA ??
+  runtimeConfig?.USDC_TESTNET ??
+  runtimeConfig?.USDC_AMOY ??
+  '0xYOUR_USDC_ADDRESS';

@@ -1,47 +1,42 @@
 ---
-description: General Project Context, Architecture, and Tech Stack for the Private Betting MVP. Always apply this to understand the goal and constraints.
+description: General project context for Private Better after pivot to private Aave supply/borrow flows.
 globs: *
 ---
 
 # PROJECT CONTEXT
 
-We are building a "Private Betting MVP" for the Arbitrum Hackathon.
-The goal is to allow users to bet on the Azuro Protocol without revealing their wallet address, using Railgun for privacy.
+We are building a private DeFi MVP for Arbitrum ecosystem eligibility.
+The current direction is private supply (and later private borrow), not prediction markets.
 
 # ARCHITECTURE (STRICT)
 
-1. **User Shields Funds:** Public USDC -> Private zkUSDC via Railgun.
-2. **User Bets via "Relayer":** - Railgun Unshield Transaction -> Calls 'PrivateBetAdapter' contract.
-   - _Crucial:_ The user's 0x wallet never interacts directly with the betting contract.
-3. **Adapter Execution:** 'PrivateBetAdapter' contract receives funds and immediately places a bet on Azuro in the same transaction.
-4. **Custody:** 'PrivateBetAdapter' holds the betting NFT.
-5. **Claiming:** If the bet wins, 'PrivateBetAdapter' claims winnings and shields them back to the user's zkAddress.
+1. **Shield:** User moves public funds to private Railgun balance.
+2. **Unshield Callback:** Railgun unshields to our adapter contract.
+3. **Adapter Routing:** Adapter routes funds to user-isolated vault (`zkOwnerHash` keyed via factory).
+4. **Yield Action:** Vault supplies funds to Aave pool.
+5. **Privacy:** User public wallet is never used as strategy account identity.
+6. **Later:** Withdraw/borrow outputs are shielded back to user private balance.
 
 # TECH STACK
 
 - **Frontend:** React + TypeScript + Tailwind CSS
 - **Package manager:** bun v1.2.17+
-- **Smart Contracts:** Solidity ^0.8.20 (Hardhat or Foundry)
-- **Web3:** Ethers.js v6 (Required for Railgun compatibility)
+- **Smart Contracts:** Solidity ^0.8.20 (Foundry)
+- **Web3:** Ethers.js v6
 - **Privacy:** `@railgun-community/wallet`, `@railgun-community/engine`
-- **Betting:** Azuro Protocol SDK (v2/v3)
-- **Network:** Polygon Amoy (Testnet), Arbitrum One (Production)
+- **Yield Protocol:** Aave (target real chain), MockAavePool for early iteration
+- **Network (dev):** Ethereum Sepolia (current integration) + mocks where needed
+- **Network (final):** Arbitrum One / Arbitrum-supported deployment
 
 # CODING RULES
 
-1. **MVP Mindset:** Write simple, functional code. Avoid over-abstraction or complex design patterns unless necessary.
-2. **Privacy First:** Never suggest a flow where the user sends ETH/tokens directly to the betting contract from their 0x address. All bets must go through the Railgun Relayer flow.
-3. **No Hallucinations:** The Railgun SDK is complex. If unsure of a method, ask the user to check `node_modules` or documentation. Do not invent function names.
-4. **Mocking:** If Azuro contracts are not available on the current testnet (e.g., Amoy), suggest creating a `MockAzuro` contract immediately to unblock development.
-5. **Styling:** Use Tailwind CSS for a dark-mode, "hacker" aesthetic (green terminal text, dark backgrounds).
-
-# SPECIFIC CONSTRAINTS
-
-- **Solidity:** Always inherit `Ownable` for the Adapter contract.
-- **React:** Manage state using standard Hooks (`useState`, `useEffect`). Avoid Redux or complex state managers for this MVP.
-- **Math:** Ensure all BigInts are handled correctly (add 'n' suffix like `100n` or use `ethers.parseUnits`).
+1. **MVP First:** Prefer simple, verifiable happy-path implementations.
+2. **Privacy First:** Keep user public wallet out of protocol-account identity.
+3. **Isolation First:** Use one-vault-per-`zkOwnerHash` to avoid multi-user state mixing.
+4. **No Hallucinations:** If unsure about Railgun/Aave method signatures, verify from installed code/docs.
+5. **Mock Early:** Use `MockAavePool` and `MockRailgun` to unblock flow validation.
 
 # DEPLOYMENT TARGETS
 
-- **Dev/Test:** Chain ID 80002 (Polygon Amoy)
-- **Production:** Chain ID 42161 (Arbitrum One)
+- **Local/dev validation:** Ethereum Sepolia with mocks or real Aave depending on stage.
+- **Final hackathon deployment:** Arbitrum-compatible contracts and addresses.

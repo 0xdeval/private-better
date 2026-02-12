@@ -11,7 +11,7 @@ import {
 } from '@railgun-community/shared-models';
 import { HDNodeWallet, Wallet, keccak256 } from 'ethers';
 
-import { TEST_NETWORK, TEST_RPC_URL, USDC_AMOY } from './railgunConstants';
+import { TEST_NETWORK, TEST_RPC_URL, TEST_USDC_ADDRESS } from './railgunConstants';
 import { createBrowserArtifactStore, createWebDatabase } from './railgunStorage';
 
 export class RailgunManager {
@@ -21,10 +21,9 @@ export class RailgunManager {
     const config = NETWORK_CONFIG[networkName] as any;
     if (!config) return;
 
-    // Polygon Amoy in shared-models 7.6.1 has empty V3 contract addresses.
-    // If supportsV3 stays true, engine init may instantiate contracts at "" and fail in ethers.
+    // Defensive fallback for shared-models network metadata inconsistencies.
     if (
-      networkName === NetworkName.PolygonAmoy &&
+      config.supportsV3 &&
       (!config.poseidonMerkleAccumulatorV3Contract ||
         !config.poseidonMerkleVerifierV3Contract ||
         !config.tokenVaultV3Contract)
@@ -40,7 +39,7 @@ export class RailgunManager {
         error.message.includes('value=""')
       ) {
         return new Error(
-          'Railgun init failed because Polygon Amoy V3 contract addresses are empty in shared-models. V3 has been disabled for Amoy; retry `init-railgun`.',
+          `Railgun init failed due to empty contract addresses for ${TEST_NETWORK} in shared-models. Retry \`init-railgun\` with a valid RPC.`,
         );
       }
 
@@ -49,7 +48,7 @@ export class RailgunManager {
         error.message.includes('code=SERVER_ERROR')
       ) {
         return new Error(
-          'RPC rejected batched JSON-RPC requests. Use `set-rpc <url>` with an endpoint that supports batching on Amoy.',
+          `RPC rejected batched JSON-RPC requests for ${TEST_NETWORK}. Use \`set-rpc <url>\` with an endpoint that supports batching.`,
         );
       }
 
@@ -186,12 +185,14 @@ export class RailgunManager {
     amount: bigint,
   ): Promise<string> {
     this.getConnectedProvider(publicWallet);
-    if (USDC_AMOY === '0xYOUR_USDC_AMOY_ADDRESS') {
-      throw new Error('USDC_AMOY not configured. Set VITE_USDC_AMOY or use CLI command `set-usdc`.');
+    if (TEST_USDC_ADDRESS === '0xYOUR_USDC_ADDRESS') {
+      throw new Error(
+        'USDC token is not configured. Set VITE_USDC_ADDRESS (or legacy fallback keys) or use CLI command `set-usdc`.',
+      );
     }
 
     const erc20AmountRecipients = [
-      this.serializeERC20Transfer(USDC_AMOY, amount, railgunWalletAddress),
+      this.serializeERC20Transfer(TEST_USDC_ADDRESS, amount, railgunWalletAddress),
     ];
 
     const shieldPrivateKey = await this.getShieldSignature(publicWallet);

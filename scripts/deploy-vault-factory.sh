@@ -43,16 +43,27 @@ load_dotenv() {
   done < "${file}"
 }
 
-# Load .env values safely (supports values with spaces without shell-eval).
 load_dotenv "${ENV_FILE}"
+
+resolve_env() {
+  local target="$1"
+  shift
+  for key in "$@"; do
+    if [[ -n "${!key:-}" ]]; then
+      export "${target}=${!key}"
+      return 0
+    fi
+  done
+  return 1
+}
 
 if ! command -v forge >/dev/null 2>&1; then
   echo "Error: forge is not installed or not in PATH." >&2
   exit 1
 fi
 
-if [[ -z "${AMOY_RPC_URL:-}" ]]; then
-  echo "Error: AMOY_RPC_URL is missing in .env" >&2
+if ! resolve_env RPC_URL RPC_URL AMOY_RPC_URL; then
+  echo "Error: RPC_URL is missing in .env (legacy fallback: AMOY_RPC_URL)." >&2
   exit 1
 fi
 
@@ -66,31 +77,32 @@ if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   exit 1
 fi
 
-echo "Deploying MockAzuro to Amoy..."
-echo "RPC: ${AMOY_RPC_URL}"
+echo "Deploying VaultFactory..."
+echo "RPC: ${RPC_URL}"
 
-DEPLOY_OUTPUT="$(forge create contracts/mocks/MockAzuro.sol:MockAzuro \
-  --rpc-url "${AMOY_RPC_URL}" \
+DEPLOY_OUTPUT="$(forge create contracts/VaultFactory.sol:VaultFactory \
+  --rpc-url "${RPC_URL}" \
   --private-key "${DEPLOYER_PRIVATE_KEY}" \
   --broadcast 2>&1)"
 
 echo "${DEPLOY_OUTPUT}"
 
-MOCK_AZURO_ADDRESS="$(echo "${DEPLOY_OUTPUT}" | sed -n 's/.*Deployed to: \(0x[0-9a-fA-F]\{40\}\).*/\1/p' | tail -n1)"
+FACTORY_ADDRESS="$(echo "${DEPLOY_OUTPUT}" | sed -n 's/.*Deployed to: \(0x[0-9a-fA-F]\{40\}\).*/\1/p' | tail -n1)"
 
-if [[ -z "${MOCK_AZURO_ADDRESS}" ]]; then
+if [[ -z "${FACTORY_ADDRESS}" ]]; then
   if echo "${DEPLOY_OUTPUT}" | grep -qi "insufficient funds"; then
     echo "Error: deployment failed due to insufficient gas funds in deployer wallet." >&2
-    echo "Top up POL on Amoy and run the script again." >&2
+    echo "Top up native gas token on the target chain and run the script again." >&2
   else
     echo "Error: could not parse deployed address from forge output." >&2
-    echo "If forge still shows dry-run mode, run manually:" >&2
-    echo "forge create contracts/mocks/MockAzuro.sol:MockAzuro --rpc-url \"\$AMOY_RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast" >&2
+    echo "If needed, run manually:" >&2
+    echo "forge create contracts/VaultFactory.sol:VaultFactory --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast" >&2
   fi
   exit 1
 fi
 
 echo
-echo "MockAzuro deployed at: ${MOCK_AZURO_ADDRESS}"
+echo "VaultFactory deployed at: ${FACTORY_ADDRESS}"
 echo "Add/update this in .env:"
-echo "AMOY_AZURO_ADAPTER=${MOCK_AZURO_ADDRESS}"
+echo "VAULT_FACTORY=${FACTORY_ADDRESS}"
+echo "(legacy fallback still accepted: AMOY_VAULT_FACTORY=${FACTORY_ADDRESS})"

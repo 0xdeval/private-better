@@ -77,32 +77,32 @@ if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   exit 1
 fi
 
-echo "Deploying MockRailgun..."
+echo "Deploying MockAavePool..."
 echo "RPC: ${RPC_URL}"
 
-DEPLOY_OUTPUT="$(forge create contracts/mocks/MockRailgun.sol:MockRailgun \
+DEPLOY_OUTPUT="$(forge create contracts/mocks/MockAavePool.sol:MockAavePool \
   --rpc-url "${RPC_URL}" \
   --private-key "${DEPLOYER_PRIVATE_KEY}" \
   --broadcast 2>&1)"
 
 echo "${DEPLOY_OUTPUT}"
 
-MOCK_RAILGUN_ADDRESS="$(echo "${DEPLOY_OUTPUT}" | sed -n 's/.*Deployed to: \(0x[0-9a-fA-F]\{40\}\).*/\1/p' | tail -n1)"
+MOCK_AAVE_POOL_ADDRESS="$(echo "${DEPLOY_OUTPUT}" | sed -n 's/.*Deployed to: \(0x[0-9a-fA-F]\{40\}\).*/\1/p' | tail -n1)"
 
-if [[ -z "${MOCK_RAILGUN_ADDRESS}" ]]; then
+if [[ -z "${MOCK_AAVE_POOL_ADDRESS}" ]]; then
   if echo "${DEPLOY_OUTPUT}" | grep -qi "insufficient funds"; then
     echo "Error: deployment failed due to insufficient gas funds in deployer wallet." >&2
     echo "Top up native gas token on the target chain and run the script again." >&2
   else
     echo "Error: could not parse deployed address from forge output." >&2
     echo "If needed, run manually:" >&2
-    echo "forge create contracts/mocks/MockRailgun.sol:MockRailgun --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast" >&2
+    echo "forge create contracts/mocks/MockAavePool.sol:MockAavePool --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast" >&2
   fi
   exit 1
 fi
 
 echo
-echo "MockRailgun deployed at: ${MOCK_RAILGUN_ADDRESS}"
+echo "MockAavePool deployed at: ${MOCK_AAVE_POOL_ADDRESS}"
 echo "Add/update this in .env:"
-echo "MOCK_RAILGUN=${MOCK_RAILGUN_ADDRESS}"
-echo "(legacy fallback still accepted: AMOY_MOCK_RAILGUN=${MOCK_RAILGUN_ADDRESS})"
+echo "MOCK_AAVE_POOL=${MOCK_AAVE_POOL_ADDRESS}"
+echo "(legacy fallback still accepted: AMOY_MOCK_AAVE_POOL=${MOCK_AAVE_POOL_ADDRESS})"
