@@ -125,7 +125,7 @@ done
 SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}" # 1 token if decimals=6
 SMOKE_WITHDRAW_AMOUNT="${SMOKE_WITHDRAW_AMOUNT:-${SMOKE_STAKE_AMOUNT}}"
 SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL:-zk-owner-withdraw-smoke-$(date +%s)}"
-SMOKE_SHIELD_LABEL="${SMOKE_SHIELD_LABEL:-zk-shield-withdraw-smoke-$(date +%s)}"
+SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-withdraw-secret-withdraw-smoke-$(date +%s)}"
 SMOKE_SET_CALLBACK_TO_DEPLOYER="${SMOKE_SET_CALLBACK_TO_DEPLOYER:-true}"
 SMOKE_SET_SHIELD_TO_MOCK="${SMOKE_SET_SHIELD_TO_MOCK:-false}"
 SMOKE_RESTORE_CALLBACK="${SMOKE_RESTORE_CALLBACK:-true}"
@@ -208,12 +208,14 @@ cast send "${SUPPLY_TOKEN}" \
 
 echo "Step 4/8: Building supply request..."
 REQUEST_DATA="$(
-  SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" \
+  SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
   bun -e '
     import { AbiCoder, keccak256, toUtf8Bytes } from "ethers";
     const zkOwnerHash = keccak256(toUtf8Bytes(process.env.SMOKE_ZK_OWNER_LABEL ?? "zk-owner-withdraw-smoke"));
+    const withdrawSecret = keccak256(toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-withdraw-smoke"));
+    const withdrawAuthHash = keccak256(withdrawSecret);
     const coder = AbiCoder.defaultAbiCoder();
-    console.log(coder.encode(["tuple(bytes32)"], [[zkOwnerHash]]));
+    console.log(coder.encode(["tuple(bytes32,bytes32)"], [[zkOwnerHash, withdrawAuthHash]]));
   '
 )"
 
@@ -226,9 +228,23 @@ cast send "${PRIVATE_SUPPLY_ADAPTER}" \
   "onRailgunUnshield(address,uint256,bytes)" "${SUPPLY_TOKEN}" "${SMOKE_STAKE_AMOUNT}" "${REQUEST_DATA}" \
   --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 
-SHIELD_HASH="$(
-  SMOKE_SHIELD_LABEL="${SMOKE_SHIELD_LABEL}" \
-  bun -e 'import { keccak256, toUtf8Bytes } from "ethers"; console.log(keccak256(toUtf8Bytes(process.env.SMOKE_SHIELD_LABEL ?? "zk-shield-withdraw-smoke")));'
+WITHDRAW_SECRET="$(
+  SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
+  bun -e 'import { keccak256, toUtf8Bytes } from "ethers"; console.log(keccak256(toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-withdraw-smoke")));'
+)"
+
+NEXT_WITHDRAW_AUTH_HASH="$(
+  SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" SMOKE_WITHDRAW_AMOUNT="${SMOKE_WITHDRAW_AMOUNT}" \
+  bun -e '
+    import { keccak256, toUtf8Bytes } from "ethers";
+    const amount = (process.env.SMOKE_WITHDRAW_AMOUNT ?? "").toLowerCase();
+    if (amount === "115792089237316195423570985008687907853269984665640564039457584007913129639935") {
+      console.log("0x0000000000000000000000000000000000000000000000000000000000000000");
+      process.exit(0);
+    }
+    const nextSecret = keccak256(toUtf8Bytes((process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-withdraw-smoke") + "-next"));
+    console.log(keccak256(nextSecret));
+  '
 )"
 
 VAULT_ADDRESS="$(cast call "${VAULT_FACTORY}" \
@@ -245,7 +261,7 @@ fi
 
 echo "Step 6/8: Calling withdrawAndShield..."
 WITHDRAW_OUTPUT="$(cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-  "withdrawAndShield(uint256,uint256,bytes32)" "${EXPECTED_POSITION_ID}" "${SMOKE_WITHDRAW_AMOUNT}" "${SHIELD_HASH}" \
+  "withdrawAndShield(uint256,uint256,bytes32,bytes32)" "${EXPECTED_POSITION_ID}" "${SMOKE_WITHDRAW_AMOUNT}" "${WITHDRAW_SECRET}" "${NEXT_WITHDRAW_AUTH_HASH}" \
   --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" 2>&1)" || {
   echo "${WITHDRAW_OUTPUT}" >&2
   echo "Hint: on real Aave, use SMOKE_WITHDRAW_AMOUNT=max to avoid exact-amount rounding issues." >&2
@@ -254,7 +270,7 @@ WITHDRAW_OUTPUT="$(cast send "${PRIVATE_SUPPLY_ADAPTER}" \
 
 echo "Step 7/8: Reading updated position..."
 POSITION="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
-  "positions(uint256)(bytes32,address,address,uint256)" "${EXPECTED_POSITION_ID}" \
+  "positions(uint256)(bytes32,address,address,uint256,bytes32)" "${EXPECTED_POSITION_ID}" \
   --rpc-url "${RPC_URL}")"
 echo "Position: ${POSITION}"
 

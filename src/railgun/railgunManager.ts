@@ -1,4 +1,5 @@
 import * as WalletSDK from '@railgun-community/wallet';
+import { WalletBalanceBucket } from '@railgun-community/engine';
 import {
   EVMGasType,
   NetworkName,
@@ -6,22 +7,51 @@ import {
   TXIDVersion,
   getEVMGasTypeForTransaction,
   type FallbackProviderJsonConfig,
+  type RailgunERC20Amount,
   type RailgunERC20AmountRecipient,
+  type RailgunERC20Recipient,
+  type RailgunNFTAmount,
+  type RailgunNFTAmountRecipient,
+  type RailgunWalletInfo,
   type TransactionGasDetails,
 } from '@railgun-community/shared-models';
-import { HDNodeWallet, Wallet, keccak256 } from 'ethers';
+import { AbiCoder, Interface, keccak256 } from 'ethers';
+import type { Signer } from 'ethers';
 
 import { TEST_NETWORK, TEST_RPC_URL, TEST_USDC_ADDRESS } from './railgunConstants';
 import { createBrowserArtifactStore, createWebDatabase } from './railgunStorage';
 
+type CrossContractCall = {
+  to: string;
+  data: string;
+  value?: bigint;
+};
+
+const ERC20_INTERFACE = new Interface([
+  'function transfer(address to, uint256 amount) returns (bool)',
+]);
+
+const ADAPTER_INTERFACE = new Interface([
+  'function onRailgunUnshield(address token, uint256 amount, bytes data) returns (uint256 positionId)',
+  'function withdrawAndShield(uint256 positionId, uint256 amount, bytes32 withdrawAuthSecret, bytes32 nextWithdrawAuthHash) returns (uint256 withdrawnAmount)',
+]);
+
 export class RailgunManager {
   private initialized = false;
+  private proverEnabled = false;
+
+  private normalizeEncryptionKey(encryptionKey: string): string {
+    const clean = encryptionKey.startsWith('0x') ? encryptionKey.slice(2) : encryptionKey;
+    if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
+      throw new Error('Invalid Railgun encryption key format. Expected 32-byte hex value.');
+    }
+    return clean;
+  }
 
   private normalizeNetworkConfigForInit(networkName: NetworkName): void {
     const config = NETWORK_CONFIG[networkName] as any;
     if (!config) return;
 
-    // Defensive fallback for shared-models network metadata inconsistencies.
     if (
       config.supportsV3 &&
       (!config.poseidonMerkleAccumulatorV3Contract ||
@@ -34,10 +64,7 @@ export class RailgunManager {
 
   private mapInitError(error: unknown): Error {
     if (error instanceof Error) {
-      if (
-        error.message.includes('UNCONFIGURED_NAME') ||
-        error.message.includes('value=""')
-      ) {
+      if (error.message.includes('UNCONFIGURED_NAME') || error.message.includes('value=""')) {
         return new Error(
           `Railgun init failed due to empty contract addresses for ${TEST_NETWORK} in shared-models. Retry \`init-railgun\` with a valid RPC.`,
         );
@@ -48,7 +75,7 @@ export class RailgunManager {
         error.message.includes('code=SERVER_ERROR')
       ) {
         return new Error(
-          `RPC rejected batched JSON-RPC requests for ${TEST_NETWORK}. Use \`set-rpc <url>\` with an endpoint that supports batching.`,
+          `RPC rejected batched JSON-RPC requests for ${TEST_NETWORK}. Update VITE_RAILGUN_RPC to an endpoint that supports batching.`,
         );
       }
 
@@ -58,10 +85,10 @@ export class RailgunManager {
     return new Error('Unknown Railgun init error.');
   }
 
-  async initEngine(): Promise<void> {
+  async initEngine(rpcUrl = TEST_RPC_URL): Promise<void> {
     if (this.initialized) return;
-    if (!TEST_RPC_URL) {
-      throw new Error('Missing Railgun RPC URL. Set VITE_RAILGUN_RPC or use CLI command `set-rpc`.');
+    if (!rpcUrl) {
+      throw new Error('Missing Railgun RPC URL. Set VITE_RAILGUN_RPC.');
     }
 
     this.normalizeNetworkConfigForInit(TEST_NETWORK);
@@ -82,7 +109,7 @@ export class RailgunManager {
     );
 
     try {
-      await this.loadEngineProvider(TEST_NETWORK, TEST_RPC_URL);
+      await this.loadEngineProvider(TEST_NETWORK, rpcUrl);
     } catch (error) {
       throw this.mapInitError(error);
     }
@@ -90,22 +117,30 @@ export class RailgunManager {
     this.initialized = true;
   }
 
-  async createWallet(mnemonic: string): Promise<string> {
-    const encryptionKey = '0000000000000000000000000000000000000000000000000000000000000000';
-    const railgunWalletInfo = await WalletSDK.createRailgunWallet(encryptionKey, mnemonic, {});
-    return railgunWalletInfo.railgunAddress;
+  async createWallet(mnemonic: string, encryptionKey: string): Promise<RailgunWalletInfo> {
+    return WalletSDK.createRailgunWallet(this.normalizeEncryptionKey(encryptionKey), mnemonic, {});
   }
 
-  // Needed later for private tx proofs. Not required for shield-only flows.
+  async loadWallet(walletID: string, encryptionKey: string): Promise<RailgunWalletInfo> {
+    return WalletSDK.loadWalletByID(this.normalizeEncryptionKey(encryptionKey), walletID, false);
+  }
+
+  async deleteWallet(walletID: string): Promise<void> {
+    await WalletSDK.deleteWalletByID(walletID);
+  }
+
   async enableSnarkJSProver(): Promise<void> {
+    if (this.proverEnabled) return;
     const snarkjs = await import('snarkjs');
     WalletSDK.getProver().setSnarkJSGroth16(snarkjs.groth16 as any);
+    this.proverEnabled = true;
   }
 
   async shutdown(): Promise<void> {
     if (!this.initialized) return;
     await WalletSDK.stopRailgunEngine();
     this.initialized = false;
+    this.proverEnabled = false;
   }
 
   async loadEngineProvider(networkName: NetworkName, rpcUrl: string): Promise<void> {
@@ -117,7 +152,7 @@ export class RailgunManager {
     await WalletSDK.loadProvider(config, networkName, 10_000);
   }
 
-  private getConnectedProvider(wallet: Wallet | HDNodeWallet) {
+  private getConnectedProvider(wallet: Signer) {
     const provider = wallet.provider;
     if (!provider) {
       throw new Error('Public wallet must be connected to an RPC provider.');
@@ -125,7 +160,7 @@ export class RailgunManager {
     return provider;
   }
 
-  private async getShieldSignature(wallet: Wallet | HDNodeWallet): Promise<string> {
+  private async getShieldSignature(wallet: Signer): Promise<string> {
     const message = WalletSDK.getShieldPrivateKeySignatureMessage();
     const signature = await wallet.signMessage(message);
     return keccak256(signature);
@@ -135,7 +170,7 @@ export class RailgunManager {
     networkName: NetworkName,
     gasEstimate: bigint,
     sendWithPublicWallet: boolean,
-    wallet: Wallet | HDNodeWallet,
+    wallet: Signer,
   ): Promise<TransactionGasDetails> {
     const provider = this.getConnectedProvider(wallet);
     const evmGasType = getEVMGasTypeForTransaction(networkName, sendWithPublicWallet);
@@ -181,21 +216,24 @@ export class RailgunManager {
 
   async shieldUSDC(
     railgunWalletAddress: string,
-    publicWallet: Wallet | HDNodeWallet,
+    publicWallet: Signer,
     amount: bigint,
+    tokenAddressOverride?: string,
   ): Promise<string> {
     this.getConnectedProvider(publicWallet);
-    if (TEST_USDC_ADDRESS === '0xYOUR_USDC_ADDRESS') {
+    const tokenAddress = tokenAddressOverride ?? TEST_USDC_ADDRESS;
+    if (tokenAddress === '0xYOUR_USDC_ADDRESS') {
       throw new Error(
-        'USDC token is not configured. Set VITE_USDC_ADDRESS (or legacy fallback keys) or use CLI command `set-usdc`.',
+        'USDC token is not configured. Set VITE_USDC_ADDRESS (or legacy fallback keys).',
       );
     }
 
     const erc20AmountRecipients = [
-      this.serializeERC20Transfer(TEST_USDC_ADDRESS, amount, railgunWalletAddress),
+      this.serializeERC20Transfer(tokenAddress, amount, railgunWalletAddress),
     ];
 
     const shieldPrivateKey = await this.getShieldSignature(publicWallet);
+    const signerAddress = await publicWallet.getAddress();
 
     const { gasEstimate } = await WalletSDK.gasEstimateForShield(
       TXIDVersion.V2_PoseidonMerkle,
@@ -203,7 +241,7 @@ export class RailgunManager {
       shieldPrivateKey,
       erc20AmountRecipients,
       [],
-      publicWallet.address,
+      signerAddress,
     );
 
     const gasDetails = await this.getGasDetailsForTransaction(
@@ -225,5 +263,171 @@ export class RailgunManager {
     const txResponse = await publicWallet.sendTransaction(transaction as any);
     await txResponse.wait();
     return txResponse.hash;
+  }
+
+  // TODO: Fix the RPC limits issue
+  // Currently impossible to fetch live balance due to RPC limits. Need to get paid one? 
+  async getShieldedTokenBalance(walletID: string, tokenAddress: string): Promise<bigint> {
+    const chain = NETWORK_CONFIG[TEST_NETWORK].chain;
+    await WalletSDK.refreshBalances(chain, [walletID]);
+    const wallet = WalletSDK.fullWalletForID(walletID);
+    const amount = await wallet.getBalanceERC20(TXIDVersion.V2_PoseidonMerkle, chain, tokenAddress, [
+      WalletBalanceBucket.Spendable,
+      WalletBalanceBucket.ShieldPending,
+      WalletBalanceBucket.ProofSubmitted,
+    ]);
+    return amount ?? 0n;
+  }
+
+  private async sendCrossContractRailgunTx(
+    walletID: string,
+    encryptionKey: string,
+    publicWallet: Signer,
+    relayAdaptUnshieldERC20Amounts: RailgunERC20Amount[],
+    crossContractCalls: CrossContractCall[],
+  ): Promise<string> {
+    const normalizedEncryptionKey = this.normalizeEncryptionKey(encryptionKey);
+    await this.enableSnarkJSProver();
+
+    const relayAdaptUnshieldNFTAmounts: RailgunNFTAmount[] = [];
+    const relayAdaptShieldERC20Recipients: RailgunERC20Recipient[] = [];
+    const relayAdaptShieldNFTRecipients: RailgunNFTAmountRecipient[] = [];
+    const sendWithPublicWallet = true;
+    const dummyGasDetails = await this.getGasDetailsForTransaction(
+      TEST_NETWORK,
+      1_500_000n,
+      sendWithPublicWallet,
+      publicWallet,
+    );
+
+    const gasEstimateResponse = await WalletSDK.gasEstimateForUnprovenCrossContractCalls(
+      TXIDVersion.V2_PoseidonMerkle,
+      TEST_NETWORK,
+      walletID,
+      normalizedEncryptionKey,
+      relayAdaptUnshieldERC20Amounts,
+      relayAdaptUnshieldNFTAmounts,
+      relayAdaptShieldERC20Recipients,
+      relayAdaptShieldNFTRecipients,
+      crossContractCalls as any,
+      dummyGasDetails,
+      undefined,
+      sendWithPublicWallet,
+      undefined,
+    );
+
+    const gasDetails = await this.getGasDetailsForTransaction(
+      TEST_NETWORK,
+      gasEstimateResponse.gasEstimate,
+      sendWithPublicWallet,
+      publicWallet,
+    );
+
+    await WalletSDK.generateCrossContractCallsProof(
+      TXIDVersion.V2_PoseidonMerkle,
+      TEST_NETWORK,
+      walletID,
+      normalizedEncryptionKey,
+      relayAdaptUnshieldERC20Amounts,
+      relayAdaptUnshieldNFTAmounts,
+      relayAdaptShieldERC20Recipients,
+      relayAdaptShieldNFTRecipients,
+      crossContractCalls as any,
+      undefined,
+      sendWithPublicWallet,
+      undefined,
+      undefined,
+      () => undefined,
+    );
+
+    const { transaction } = await WalletSDK.populateProvedCrossContractCalls(
+      TXIDVersion.V2_PoseidonMerkle,
+      TEST_NETWORK,
+      walletID,
+      relayAdaptUnshieldERC20Amounts,
+      relayAdaptUnshieldNFTAmounts,
+      relayAdaptShieldERC20Recipients,
+      relayAdaptShieldNFTRecipients,
+      crossContractCalls as any,
+      undefined,
+      sendWithPublicWallet,
+      undefined,
+      gasDetails,
+    );
+
+    const txResponse = await publicWallet.sendTransaction(transaction as any);
+    await txResponse.wait();
+    return txResponse.hash;
+  }
+
+  async privateSupply(params: {
+    walletID: string;
+    encryptionKey: string;
+    publicWallet: Signer;
+    adapterAddress: string;
+    tokenAddress: string;
+    amount: bigint;
+    zkOwnerHash: string;
+    withdrawAuthHash: string;
+  }): Promise<string> {
+    const { walletID, encryptionKey, publicWallet, adapterAddress, tokenAddress, amount, zkOwnerHash, withdrawAuthHash } =
+      params;
+    if (amount <= 0n) {
+      throw new Error('Supply amount must be > 0.');
+    }
+
+    const coder = AbiCoder.defaultAbiCoder();
+    const supplyRequestData = coder.encode(['tuple(bytes32,bytes32)'], [[zkOwnerHash, withdrawAuthHash]]);
+    const transferToAdapterData = ERC20_INTERFACE.encodeFunctionData('transfer', [adapterAddress, amount]);
+
+    const onUnshieldData = ADAPTER_INTERFACE.encodeFunctionData('onRailgunUnshield', [
+      tokenAddress,
+      amount,
+      supplyRequestData,
+    ]);
+
+    return this.sendCrossContractRailgunTx(
+      walletID,
+      encryptionKey,
+      publicWallet,
+      [{ tokenAddress, amount }],
+      [
+        { to: tokenAddress, data: transferToAdapterData, value: 0n },
+        { to: adapterAddress, data: onUnshieldData, value: 0n },
+      ],
+    );
+  }
+
+  async privateWithdraw(params: {
+    walletID: string;
+    encryptionKey: string;
+    publicWallet: Signer;
+    adapterAddress: string;
+    positionId: bigint;
+    amount: bigint;
+    withdrawAuthSecret: string;
+    nextWithdrawAuthHash: string;
+  }): Promise<string> {
+    const {
+      walletID,
+      encryptionKey,
+      publicWallet,
+      adapterAddress,
+      positionId,
+      amount,
+      withdrawAuthSecret,
+      nextWithdrawAuthHash,
+    } = params;
+
+    const withdrawData = ADAPTER_INTERFACE.encodeFunctionData('withdrawAndShield', [
+      positionId,
+      amount,
+      withdrawAuthSecret,
+      nextWithdrawAuthHash,
+    ]);
+
+    return this.sendCrossContractRailgunTx(walletID, encryptionKey, publicWallet, [], [
+      { to: adapterAddress, data: withdrawData, value: 0n },
+    ]);
   }
 }

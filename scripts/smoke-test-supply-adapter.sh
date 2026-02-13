@@ -116,6 +116,7 @@ done
 
 SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}" # 1 USDC
 SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL:-zk-owner-supply-smoke}"
+SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-withdraw-secret-supply-smoke}"
 SMOKE_SET_CALLBACK_TO_DEPLOYER="${SMOKE_SET_CALLBACK_TO_DEPLOYER:-true}"
 SMOKE_RESTORE_CALLBACK="${SMOKE_RESTORE_CALLBACK:-true}"
 
@@ -204,12 +205,14 @@ cast send "${SUPPLY_TOKEN}" \
 
 echo "Step 3/6: Building supply request..."
 REQUEST_DATA="$(
-  SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" \
+  SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
   bun -e '
     import { AbiCoder, keccak256, toUtf8Bytes } from "ethers";
     const zkOwnerHash = keccak256(toUtf8Bytes(process.env.SMOKE_ZK_OWNER_LABEL ?? "zk-owner-supply-smoke"));
+    const withdrawSecret = keccak256(toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-supply-smoke"));
+    const withdrawAuthHash = keccak256(withdrawSecret);
     const coder = AbiCoder.defaultAbiCoder();
-    console.log(coder.encode(["tuple(bytes32)"], [[zkOwnerHash]]));
+    console.log(coder.encode(["tuple(bytes32,bytes32)"], [[zkOwnerHash, withdrawAuthHash]]));
   '
 )"
 
@@ -230,7 +233,7 @@ STEP4_OUTPUT="$(cast send "${PRIVATE_SUPPLY_ADAPTER}" \
 
 echo "Step 5/6: Reading position and vault..."
 POSITION="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
-  "positions(uint256)(bytes32,address,address,uint256)" "${EXPECTED_POSITION_ID}" \
+  "positions(uint256)(bytes32,address,address,uint256,bytes32)" "${EXPECTED_POSITION_ID}" \
   --rpc-url "${RPC_URL}")"
 
 VAULT_ADDRESS="$(cast call "${VAULT_FACTORY}" \

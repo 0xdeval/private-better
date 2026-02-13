@@ -1,0 +1,68 @@
+---
+description: Phase 3 status context - real Aave integration validated on Arbitrum Sepolia.
+globs: *
+---
+
+# PHASE 3 STATUS (REAL AAVE INTEGRATION)
+
+Phase 3 is considered complete at contract + script level.
+
+## What Is Validated
+
+1. Real Aave Pool wiring on Arbitrum Sepolia.
+2. `onRailgunUnshield` supply flow through:
+   - `PrivateSupplyAdapter` -> `VaultFactory` -> `UserVault` -> Aave Pool.
+3. Withdraw path implemented and validated:
+   - `withdrawAndShield(positionId, amount, shieldHash)`.
+4. Full smoke path tested:
+   - supply to real Aave reserve,
+   - withdraw from real Aave reserve,
+   - shield call via mock shield contract endpoint.
+
+## Key Contracts
+
+1. `contracts/PrivateSupplyAdapter.sol`
+- supply callback entrypoint
+- withdraw + shield entrypoint
+- position accounting
+
+2. `contracts/VaultFactory.sol`
+- one vault per `zkOwnerHash`
+
+3. `contracts/UserVault.sol`
+- direct Aave Pool interaction for supply/withdraw
+
+## Key Scripts
+
+1. `scripts/smoke-test-supply-adapter.sh`
+- real/mock Aave supply smoke
+
+2. `scripts/smoke-test-withdraw-supply-adapter.sh`
+- supply + withdraw + shield smoke
+- supports `SMOKE_SET_SHIELD_TO_MOCK=true`
+- supports `SMOKE_WITHDRAW_AMOUNT=max`
+
+## Important Behaviors / Caveats
+
+1. Vault is reused per `zkOwnerHash` by design.
+2. `withdrawAndShield(..., max, ...)` now means max for that position, not full vault.
+3. Real Aave reserve caps may still cause reverts (e.g. code `51`) if reserve is saturated.
+4. `SUPPLY_TOKEN` must be the exact underlying reserve token listed in selected Aave Pool.
+
+## Required Env (Chain-Agnostic)
+
+1. `RPC_URL`
+2. `DEPLOYER_PRIVATE_KEY`
+3. `SUPPLY_TOKEN`
+4. `AAVE_POOL`
+5. `VAULT_FACTORY`
+6. `PRIVATE_SUPPLY_ADAPTER`
+7. `MOCK_RAILGUN` (if mock-shield smoke is used)
+8. `RAILGUN_CALLBACK_SENDER`
+9. `RAILGUN_SHIELD`
+
+## Phase 3 Exit Criteria (Met)
+
+1. Real Aave supply smoke passed on Arbitrum Sepolia.
+2. Withdraw + shield smoke passed (with mock shield target).
+3. Position bookkeeping updates correctly after withdraw.

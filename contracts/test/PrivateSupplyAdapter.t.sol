@@ -7,19 +7,21 @@ import {MockAavePool} from "../mocks/MockAavePool.sol";
 import {MockRailgun} from "../mocks/MockRailgun.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
 
-contract NonOwnerWithdrawCaller {
+contract NonCallbackWithdrawCaller {
   function callWithdraw(
     address adapter,
     uint256 positionId,
     uint256 amount,
-    bytes32 shieldToZkAddressHash
+    bytes32 withdrawAuthSecret,
+    bytes32 nextWithdrawAuthHash
   ) external returns (bool ok) {
     (ok, ) = adapter.call(
       abi.encodeWithSignature(
-        "withdrawAndShield(uint256,uint256,bytes32)",
+        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
         positionId,
         amount,
-        shieldToZkAddressHash
+        withdrawAuthSecret,
+        nextWithdrawAuthHash
       )
     );
   }
@@ -31,7 +33,7 @@ contract PrivateSupplyAdapterTest {
   MockRailgun internal railgun;
   VaultFactory internal factory;
   PrivateSupplyAdapter internal adapter;
-  NonOwnerWithdrawCaller internal nonOwnerCaller;
+  NonCallbackWithdrawCaller internal nonCallbackCaller;
 
   uint256 internal constant USDC_1 = 1_000_000;
   uint256 internal constant STAKE = 100 * USDC_1;
@@ -48,7 +50,7 @@ contract PrivateSupplyAdapterTest {
       address(usdc),
       address(factory)
     );
-    nonOwnerCaller = new NonOwnerWithdrawCaller();
+    nonCallbackCaller = new NonCallbackWithdrawCaller();
 
     factory.setAdapter(address(adapter));
     railgun.setAdapter(address(adapter));
@@ -58,45 +60,61 @@ contract PrivateSupplyAdapterTest {
     railgun.depositToken(address(usdc), 600 * USDC_1);
   }
 
-  function testUnshieldSupplyFlowCreatesVaultAndSuppliesToAave() public {
+  function testUnshieldSupplyFlowStoresWithdrawAuthAndOwnerIndex() public {
     bytes32 zkOwnerHash = keccak256("zk-owner-1");
-    bytes memory data = _supplyRequestData(zkOwnerHash);
+    bytes32 withdrawAuthSecret = keccak256("withdraw-secret-1");
+    bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
+    bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
 
     uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
     require(positionId == 1, "expected position id 1");
 
-    (bytes32 ownerHash, address vault, address token, uint256 amount) = adapter.positions(positionId);
+    (bytes32 ownerHash, address vault, address token, uint256 amount, bytes32 storedWithdrawAuthHash) = adapter
+      .positions(positionId);
     require(ownerHash == zkOwnerHash, "owner hash mismatch");
     require(vault != address(0), "vault not created");
     require(token == address(usdc), "token mismatch");
     require(amount == STAKE, "amount mismatch");
+    require(storedWithdrawAuthHash == withdrawAuthHash, "withdraw auth hash mismatch");
+
+    (uint256[] memory ownerIds, uint256 total) = adapter.getOwnerPositionIds(zkOwnerHash, 0, 10);
+    require(total == 1, "owner position total mismatch");
+    require(ownerIds.length == 1 && ownerIds[0] == positionId, "owner position id mismatch");
 
     uint256 supplied = aavePool.suppliedBalance(vault, address(usdc));
     require(supplied == STAKE, "aave supplied balance mismatch");
   }
 
   function testOnlyRailgunCanCallUnshieldCallback() public {
-    bytes memory data = _supplyRequestData(keccak256("zk-owner-2"));
+    bytes32 zkOwnerHash = keccak256("zk-owner-2");
+    bytes32 withdrawAuthHash = keccak256("withdraw-auth-2");
+    bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
     (bool ok, ) = address(adapter).call(
       abi.encodeWithSelector(adapter.onRailgunUnshield.selector, address(usdc), STAKE, data)
     );
     require(!ok, "expected callback access control revert");
   }
 
-  function testWithdrawAndShieldFullFlow() public {
+  function testWithdrawAndShieldFullFlowWithCorrectSecret() public {
+    adapter.setRailgunCallbackSender(address(this));
+
     bytes32 zkOwnerHash = keccak256("zk-owner-3");
-    bytes32 shieldToZkAddressHash = keccak256("zk-shield-recipient-3");
-    bytes memory data = _supplyRequestData(zkOwnerHash);
+    bytes32 withdrawAuthSecret = keccak256("withdraw-secret-3");
+    bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
+    bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
 
     uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
-    uint256 withdrawn = adapter.withdrawAndShield(positionId, type(uint256).max, shieldToZkAddressHash);
+    uint256 withdrawn = adapter.withdrawAndShield(positionId, type(uint256).max, withdrawAuthSecret, bytes32(0));
     require(withdrawn == STAKE, "withdrawn amount mismatch");
 
-    (bytes32 ownerHash, address vault, address token, uint256 amount) = adapter.positions(positionId);
+    (bytes32 ownerHash, address vault, address token, uint256 amount, bytes32 nextWithdrawHash) = adapter.positions(
+      positionId
+    );
     require(ownerHash == zkOwnerHash, "owner hash mismatch");
     require(vault != address(0), "vault missing");
     require(token == address(usdc), "token mismatch");
     require(amount == 0, "position amount should be zero");
+    require(nextWithdrawHash == bytes32(0), "next withdraw hash should be zero");
 
     uint256 supplied = aavePool.suppliedBalance(vault, address(usdc));
     require(supplied == 0, "aave supplied should be zero");
@@ -105,38 +123,89 @@ contract PrivateSupplyAdapterTest {
     require(railgunBalance == 600 * USDC_1, "railgun balance should be restored");
   }
 
-  function testOnlyOwnerCanWithdrawAndShield() public {
+  function testWithdrawRevertsForWrongSecret() public {
+    adapter.setRailgunCallbackSender(address(this));
+
     bytes32 zkOwnerHash = keccak256("zk-owner-4");
-    bytes memory data = _supplyRequestData(zkOwnerHash);
+    bytes32 withdrawAuthSecret = keccak256("withdraw-secret-4");
+    bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
+    bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
     uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
 
-    bool ok = nonOwnerCaller.callWithdraw(
-      address(adapter),
-      positionId,
-      STAKE,
-      keccak256("zk-shield-recipient-4")
-    );
-    require(!ok, "non-owner withdraw should fail");
-  }
-
-  function testWithdrawRevertsWhenAmountExceedsPosition() public {
-    bytes32 zkOwnerHash = keccak256("zk-owner-5");
-    bytes memory data = _supplyRequestData(zkOwnerHash);
-    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
-
+    bytes32 wrongSecret = keccak256("wrong-secret-4");
     (bool ok, ) = address(adapter).call(
       abi.encodeWithSignature(
-        "withdrawAndShield(uint256,uint256,bytes32)",
+        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
         positionId,
-        STAKE + 1,
-        keccak256("zk-shield-recipient-5")
+        STAKE,
+        wrongSecret,
+        bytes32(0)
       )
     );
-    require(!ok, "withdraw above position amount should fail");
+    require(!ok, "withdraw with wrong secret should fail");
   }
 
-  function _supplyRequestData(bytes32 zkOwnerHash) internal pure returns (bytes memory) {
-    PrivateSupplyAdapter.SupplyRequest memory request = PrivateSupplyAdapter.SupplyRequest({zkOwnerHash: zkOwnerHash});
+  function testOnlyCallbackCanWithdrawAndShield() public {
+    bytes32 zkOwnerHash = keccak256("zk-owner-5");
+    bytes32 withdrawAuthSecret = keccak256("withdraw-secret-5");
+    bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
+    bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
+    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
+
+    bool ok = nonCallbackCaller.callWithdraw(address(adapter), positionId, STAKE, withdrawAuthSecret, bytes32(0));
+    require(!ok, "non-callback withdraw should fail");
+  }
+
+  function testPartialWithdrawRotatesSecret() public {
+    adapter.setRailgunCallbackSender(address(this));
+
+    bytes32 zkOwnerHash = keccak256("zk-owner-6");
+    bytes32 withdrawAuthSecret = keccak256("withdraw-secret-6");
+    bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
+    bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
+    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
+
+    uint256 partialAmount = 40 * USDC_1;
+    bytes32 nextSecret = keccak256("withdraw-secret-6-next");
+    bytes32 nextHash = keccak256(abi.encodePacked(nextSecret));
+
+    uint256 withdrawn = adapter.withdrawAndShield(positionId, partialAmount, withdrawAuthSecret, nextHash);
+    require(withdrawn == partialAmount, "partial withdrawn mismatch");
+
+    (, , , uint256 remainingAmount, bytes32 storedNextHash) = adapter.positions(positionId);
+    require(remainingAmount == STAKE - partialAmount, "remaining amount mismatch");
+    require(storedNextHash == nextHash, "next hash not stored");
+
+    // Old secret must fail after rotation.
+    (bool okOld, ) = address(adapter).call(
+      abi.encodeWithSignature(
+        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
+        positionId,
+        1,
+        withdrawAuthSecret,
+        keccak256("another-next-hash")
+      )
+    );
+    require(!okOld, "old secret should fail after rotation");
+
+    // New secret should pass.
+    (bool okNew, ) = address(adapter).call(
+      abi.encodeWithSignature(
+        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
+        positionId,
+        type(uint256).max,
+        nextSecret,
+        bytes32(0)
+      )
+    );
+    require(okNew, "new secret should pass");
+  }
+
+  function _supplyRequestData(bytes32 zkOwnerHash, bytes32 withdrawAuthHash) internal pure returns (bytes memory) {
+    PrivateSupplyAdapter.SupplyRequest memory request = PrivateSupplyAdapter.SupplyRequest({
+      zkOwnerHash: zkOwnerHash,
+      withdrawAuthHash: withdrawAuthHash
+    });
     return abi.encode(request);
   }
 }

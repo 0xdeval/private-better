@@ -11,6 +11,7 @@ import {VaultFactory} from "./VaultFactory.sol";
 contract PrivateSupplyAdapter is Ownable {
   struct SupplyRequest {
     bytes32 zkOwnerHash;
+    bytes32 withdrawAuthHash;
   }
 
   struct SupplyPosition {
@@ -18,6 +19,7 @@ contract PrivateSupplyAdapter is Ownable {
     address vault;
     address token;
     uint256 amount;
+    bytes32 withdrawAuthHash;
   }
 
   address public railgunCallbackSender;
@@ -28,6 +30,7 @@ contract PrivateSupplyAdapter is Ownable {
   uint256 public nextPositionId;
 
   mapping(uint256 => SupplyPosition) public positions;
+  mapping(bytes32 => uint256[]) private ownerPositionIds;
 
   event RailgunCallbackSenderUpdated(address indexed sender);
   event SupplyTokenUpdated(address indexed token);
@@ -39,7 +42,8 @@ contract PrivateSupplyAdapter is Ownable {
     bytes32 indexed zkOwnerHash,
     address indexed vault,
     address token,
-    uint256 amount
+    uint256 amount,
+    bytes32 withdrawAuthHash
   );
   event PrivateSupplyWithdrawn(
     uint256 indexed positionId,
@@ -47,7 +51,8 @@ contract PrivateSupplyAdapter is Ownable {
     address indexed vault,
     address token,
     uint256 amount,
-    bytes32 shieldToZkAddressHash
+    bytes32 shieldToZkAddressHash,
+    bytes32 nextWithdrawAuthHash
   );
 
   modifier onlyRailgunCallback() {
@@ -115,6 +120,7 @@ contract PrivateSupplyAdapter is Ownable {
 
     SupplyRequest memory request = abi.decode(data, (SupplyRequest));
     require(request.zkOwnerHash != bytes32(0), "SupplyAdapter: zero owner");
+    require(request.withdrawAuthHash != bytes32(0), "SupplyAdapter: zero withdraw auth");
 
     address vault = vaultFactory.getOrCreateVault(request.zkOwnerHash);
     require(IERC20(token).transfer(vault, amount), "SupplyAdapter: transfer to vault failed");
@@ -125,22 +131,29 @@ contract PrivateSupplyAdapter is Ownable {
       zkOwnerHash: request.zkOwnerHash,
       vault: vault,
       token: token,
-      amount: amount
+      amount: amount,
+      withdrawAuthHash: request.withdrawAuthHash
     });
+    ownerPositionIds[request.zkOwnerHash].push(positionId);
 
-    emit PrivateSupplyDeposited(positionId, request.zkOwnerHash, vault, token, amount);
+    emit PrivateSupplyDeposited(positionId, request.zkOwnerHash, vault, token, amount, request.withdrawAuthHash);
   }
 
   function withdrawAndShield(
     uint256 positionId,
     uint256 amount,
-    bytes32 shieldToZkAddressHash
-  ) external onlyOwner returns (uint256 withdrawnAmount) {
-    require(shieldToZkAddressHash != bytes32(0), "SupplyAdapter: zero shield receiver");
+    bytes32 withdrawAuthSecret,
+    bytes32 nextWithdrawAuthHash
+  ) external onlyRailgunCallback returns (uint256 withdrawnAmount) {
+    require(withdrawAuthSecret != bytes32(0), "SupplyAdapter: zero withdraw secret");
 
     SupplyPosition storage position = positions[positionId];
     require(position.vault != address(0), "SupplyAdapter: invalid position");
     require(position.amount > 0, "SupplyAdapter: empty position");
+    require(
+      keccak256(abi.encodePacked(withdrawAuthSecret)) == position.withdrawAuthHash,
+      "SupplyAdapter: invalid withdraw auth"
+    );
 
     if (amount == type(uint256).max) {
       amount = position.amount;
@@ -155,12 +168,17 @@ contract PrivateSupplyAdapter is Ownable {
     require(withdrawnAmount <= amount, "SupplyAdapter: invalid withdrawn amount");
     position.amount -= withdrawnAmount;
 
+    if (position.amount > 0) {
+      require(nextWithdrawAuthHash != bytes32(0), "SupplyAdapter: zero next withdraw auth");
+    }
+    position.withdrawAuthHash = nextWithdrawAuthHash;
+
     require(IERC20(position.token).approve(address(railgunShield), 0), "SupplyAdapter: reset approve failed");
     require(
       IERC20(position.token).approve(address(railgunShield), withdrawnAmount),
       "SupplyAdapter: approve failed"
     );
-    railgunShield.shield(position.token, withdrawnAmount, shieldToZkAddressHash);
+    railgunShield.shield(position.token, withdrawnAmount, position.zkOwnerHash);
 
     emit PrivateSupplyWithdrawn(
       positionId,
@@ -168,7 +186,32 @@ contract PrivateSupplyAdapter is Ownable {
       position.vault,
       position.token,
       withdrawnAmount,
-      shieldToZkAddressHash
+      position.zkOwnerHash,
+      nextWithdrawAuthHash
     );
+  }
+
+  function getOwnerPositionIds(
+    bytes32 zkOwnerHash,
+    uint256 offset,
+    uint256 limit
+  ) external view returns (uint256[] memory ids, uint256 total) {
+    uint256[] storage all = ownerPositionIds[zkOwnerHash];
+    total = all.length;
+
+    if (offset >= total || limit == 0) {
+      return (new uint256[](0), total);
+    }
+
+    uint256 end = offset + limit;
+    if (end > total) {
+      end = total;
+    }
+
+    uint256 length = end - offset;
+    ids = new uint256[](length);
+    for (uint256 i = 0; i < length; i++) {
+      ids[i] = all[offset + i];
+    }
   }
 }
