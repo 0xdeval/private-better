@@ -1,54 +1,111 @@
-# ACT AS: Senior Blockchain Architect & Full-Stack Developer
-You are my co-pilot for a high-stakes hackathon project. We have limited time to ship a private DeFi MVP on Arbitrum ecosystem.
+# Private Better Agent Notes
 
-## THE GOAL
-We are building a privacy-preserving yield interface using **Railgun (ZK Privacy)** and **Aave**.
+This file is the canonical handoff context for future agents working on this repo.
 
-Core concept:
+## 1. Current Product State
 
-- User can move funds from private Railgun balance into a protocol action (`supply` first).
-- Funds are managed via user-isolated vaults keyed by `zkOwnerHash`.
-- Public wallet identity should never become the strategy account identity.
+The active runtime is a Hinkal-based browser WebCLI on Arbitrum.
 
-## THE TECH STACK
-- **Chain:** Ethereum Sepolia (current dev/test), Arbitrum One (final deployment target).
-- **Smart Contracts:** Solidity ^0.8.20 (Foundry preferred).
-- **Frontend:** React + TypeScript + Tailwind.
-- **Web3 Libs:** Ethers.js v6, `@railgun-community/wallet`, `@railgun-community/engine`.
-- **Yield Protocol:** Aave (real integration), with mocks for rapid iteration.
-- **Package manager:** bun v1.2.17+
+- Private actions: shield, unshield, private supply, private withdraw.
+- Withdraw currently returns to private balance by default.
+- Fee reserve preflight guard is implemented for supply/withdraw.
 
-## CURRENT ARCHITECTURE (STRICT)
-1. **Shield:** User deposits USDC into Railgun (public -> private).
-2. **Atomic Unshield-to-Supply (MVP):**
-   - Railgun callback unshields USDC to our adapter.
-   - Adapter routes to per-user vault via factory.
-   - Vault supplies to Aave pool.
-3. **Later (Borrow/Withdraw):**
-   - Borrow/withdraw outputs should be shielded back to user private balance.
+Railgun phase documents in old files are historical and should not be treated as current implementation state.
 
-## IMPLEMENTATION PLAN
+## 2. Project Structure
 
-### Phase 1 (Done)
-- Railgun browser integration.
-- Wallet generation + shield flow.
+```text
+.
+├─ README.md
+├─ AGENT.md
+├─ docs/
+│  └─ hinkal-webcli-notes.md
+├─ .cursor/
+│  └─ rules/
+│     ├─ 000-general-project-context.mdc
+│     ├─ 050-hinkal-webcli-handoff.mdc
+│     └─ (older phase files are historical)
+├─ src/
+│  ├─ webcli/
+│  │  ├─ entry.ts
+│  │  ├─ app.ts
+│  │  └─ polyfills.ts
+│  ├─ privacy/
+│  │  ├─ hinkalManager.ts
+│  │  ├─ privacyConstants.ts
+│  │  ├─ privacySession.ts
+│  │  ├─ privacySessionNode.ts
+│  │  └─ privacyNodeConstants.ts
+│  ├─ utils/
+│  │  └─ generateRailgunWalletPhrase.ts
+│  └─ servercli/
+│     └─ (currently empty)
+├─ contracts/
+├─ scripts/
+└─ vite.config.ts
+```
 
-### Phase 2 (Current)
-- `PrivateSupplyAdapter` + `VaultFactory` + `UserVault`.
-- Mock-first testing on Amoy (`MockAavePool`, `MockRailgun`, `MockUSDC`).
+## 3. Key Runtime Files
 
-### Phase 3
-- Real Aave pool wiring and integration scripts.
-- Supply flow validation on supported network.
+1. `src/webcli/app.ts`
+- command handling
+- wallet/signer preflight
+- fee reserve guard
+- private supply/withdraw orchestration
 
-### Phase 4
-- Frontend flow for unshield + contract call payload construction.
+2. `src/privacy/hinkalManager.ts`
+- Hinkal SDK session and actions
+- `shieldToken`, `unshieldToken`, `privateSupply`, `privateWithdraw`
 
-## CODING GUIDELINES
-- **MVP Mindset:** Prefer simple happy-path implementations.
-- **Isolation First:** One vault per user (`zkOwnerHash`) from the start.
-- **Mock First:** If real protocol address/method blocks progress, mock and continue.
-- **No Hallucinations:** If unsure about Railgun/Aave method signatures, verify from docs/code.
+3. `src/privacy/privacySession.ts`
+- encrypted browser-side session persistence
 
-IMPORTANT:
-Don't change the core source code of installed modules in `node_modules`.
+## 4. Critical Behavioral Invariants
+
+1. Do not break `private-supply` flow unless explicitly requested.
+2. Keep `private-withdraw` private-destination semantics:
+- adapter recipient is Emporium
+- Hinkal recipient metadata is provided (`recipientData`)
+3. Preserve per-position secret lifecycle:
+- rotate on partial withdraw
+- remove on full close
+4. Keep max-withdraw fallback retry for Aave rounding edge case (`0x47bc4b2c`).
+5. Do not edit `node_modules`.
+
+## 5. Fee Model Notes
+
+Hinkal fee is runtime-estimated, not fixed.
+
+WebCLI guard:
+
+- estimate `flatFee` preflight,
+- compute reserve with configured buffer,
+- fail early with clear message if private balance is insufficient.
+
+Env overrides:
+
+1. `VITE_PRIVATE_FEE_BUFFER_BPS` (default `2000`)
+2. `VITE_PRIVATE_FEE_BUFFER_MIN` (default `0.002` USDC)
+
+## 6. Common Failure Causes
+
+1. `Insufficient funds`
+- usually private spendable cannot cover action amount + reserve
+
+2. Adapter executor mismatch
+- adapter `privacyExecutor()` differs from configured Emporium
+
+3. `Transfer Failed`
+- usually token routing/allowance mismatch in adapter path
+
+## 7. Agent Workflow Expectations
+
+1. Use WebCLI flows for end-to-end checks.
+2. Validate after changes:
+- `bun run typecheck`
+- `bun run build:web`
+3. Keep docs updated when behavior changes:
+- `README.md`
+- `AGENT.md`
+- `docs/hinkal-webcli-notes.md`
+- `.cursor/rules/*`

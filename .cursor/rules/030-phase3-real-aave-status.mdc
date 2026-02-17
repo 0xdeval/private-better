@@ -1,7 +1,11 @@
 ---
-description: Phase 3 status context - real Aave integration validated on Arbitrum Sepolia.
+description: Historical Phase 3 notes (deprecated for current Hinkal WebCLI flow).
 globs: *
 ---
+
+> Historical context only. Current canonical state is in:
+> - `.cursor/rules/000-general-project-context.mdc`
+> - `.cursor/rules/050-hinkal-webcli-handoff.mdc`
 
 # PHASE 3 STATUS (REAL AAVE INTEGRATION)
 

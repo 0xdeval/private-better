@@ -1,7 +1,11 @@
 ---
-description: Phase 2 contract context after pivot: private supply via Aave-style pool with vault factory isolation.
+description: Historical Phase 2 contract notes (deprecated for current Hinkal WebCLI flow).
 globs: *
 ---
+
+> Historical context only. Current canonical state is in:
+> - `.cursor/rules/000-general-project-context.mdc`
+> - `.cursor/rules/050-hinkal-webcli-handoff.mdc`
 
 # PHASE 2 CONTEXT (PRIVATE SUPPLY)
 

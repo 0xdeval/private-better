@@ -1,0 +1,70 @@
+---
+description: Hinkal WebCLI handoff notes, invariants, and troubleshooting for future work.
+globs: *
+---
+
+# HINKAL WEBCLI: CURRENT STATE
+
+This repository currently uses a Hinkal SDK integration in `src/webcli/app.ts` and `src/privacy/hinkalManager.ts`.
+There is no active server CLI source under `src/servercli` right now.
+
+# MAIN USER FLOW
+
+1. `privacy-login` (or `privacy-import`) initializes private session.
+2. `approve-token` approves public USDC to Hinkal spender.
+3. `shield-token` moves public USDC to private spendable balance.
+4. `private-supply` creates Aave position from private balance.
+5. `show-positions` and `private-balance` inspect state.
+6. `private-withdraw` withdraws position back to private balance.
+
+# IDENTITY MODEL
+
+1. EOA signer address: wallet account used for signatures and gas.
+2. Private address: deterministic from mnemonic (used for `zkOwnerHash` derivation).
+3. Hinkal sub-account: deterministic key (nonce 0) used by Hinkal action signing.
+
+All three can differ. Do not assume they are equal.
+
+# WITHDRAW BEHAVIOR (IMPORTANT)
+
+1. Withdraw uses adapter `withdrawToRecipient(...)` with recipient set to Emporium.
+2. Hinkal `recipientData` is provided so output returns to private balance.
+3. For `max`, WebCLI resolves to exact position amount and retries with `amount - 1` on Aave rounding error (`0x47bc4b2c` / `NotEnoughAvailableUserBalance`).
+
+# FEE MODEL + RESERVE GUARD
+
+1. Hinkal fee is dynamic, relayer-estimated at runtime (`flatFee`).
+2. WebCLI preflight estimates fee and applies reserve:
+   - `reserve = flatFee + max(flatFee * bufferBps, minBuffer)`.
+3. Default reserve config:
+   - `bufferBps = 2000` (20%)
+   - `minBuffer = 0.002 USDC`
+4. User-visible fee lines are shown for supply and withdraw.
+5. If insufficient private balance for amount + reserve, command fails early with clear error.
+
+# CONFIG KEYS USED
+
+1. `VITE_PRIVATE_RPC`
+2. `VITE_PRIVATE_EMPORIUM`
+3. `VITE_PRIVATE_SUPPLY_ADAPTER`
+4. `VITE_SUPPLY_TOKEN`
+5. `VITE_PRIVATE_DEBUG` (optional)
+6. `VITE_PRIVATE_FEE_BUFFER_BPS` (optional)
+7. `VITE_PRIVATE_FEE_BUFFER_MIN` (optional, USDC units)
+
+# COMMON FAILURE MODES
+
+1. `Insufficient funds` during private action:
+   - usually private spendable cannot cover action amount + Hinkal fee reserve.
+2. Adapter privacy executor mismatch:
+   - adapter `privacyExecutor()` must equal configured Emporium.
+3. `Transfer Failed`:
+   - often allowance/routing mismatch in the specific adapter execution path.
+
+# CHANGE SAFETY
+
+1. Keep `private-supply` and `private-withdraw` semantics aligned with Hinkal demo SDK patterns.
+2. Avoid custom runtime shims for SDK unless strictly necessary.
+3. Validate changes with:
+   - `bun run typecheck`
+   - `bun run build:web`

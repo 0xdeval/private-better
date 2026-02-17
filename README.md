@@ -1,129 +1,77 @@
 # private-better
 
-Private Better now uses a Hinkal-first private flow for Arbitrum:
+Private Better is currently a Hinkal-based private Aave flow on Arbitrum, exposed through a browser WebCLI.
 
-1. Public wallet signs and pays gas.
-2. Funds are moved through private execution flow.
-3. Adapter routes supply to per-owner vaults on Aave.
-4. Withdraw uses per-position secret auth and returns funds to recipient.
+## Current Flow
 
-## Install / Run
+1. Login/import private session (`privacy-login` / `privacy-import`).
+2. Approve and shield USDC.
+3. `private-supply` creates position via adapter + vault.
+4. `private-withdraw` withdraws back to private balance.
+
+Withdraw is private-destination by default (not public recipient).
+
+## Run
 
 ```bash
 bun install
 bun run dev:web
 ```
 
-Open `http://localhost:3017` and type `help`.
+Open `http://localhost:3017`, then run `help`.
 
-Build:
+Validation:
 
 ```bash
+bun run typecheck
 bun run build:web
 ```
 
-Server CLI (no browser/Vite runtime):
-
-```bash
-bun run dev:cli
-```
-
-## WebCLI Env Variables
-
-Required:
+## Required Env
 
 1. `VITE_PRIVATE_RPC`
-2. `VITE_PRIVATE_EMPORIUM` (optional override; defaults to Arbitrum Emporium)
+2. `VITE_PRIVATE_EMPORIUM`
 3. `VITE_SUPPLY_TOKEN`
-
-Required after adapter deploy:
-
-1. `VITE_PRIVATE_SUPPLY_ADAPTER`
+4. `VITE_PRIVATE_SUPPLY_ADAPTER`
 
 Optional:
 
-1. `VITE_PRIVATE_NETWORK` (default: `Arbitrum`)
-2. `VITE_PRIVATE_TEST_MNEMONIC` (dev-only)
+1. `VITE_PRIVATE_DEBUG`
+2. `VITE_PRIVATE_TEST_MNEMONIC`
+3. `VITE_PRIVATE_FEE_BUFFER_BPS` (default `2000`)
+4. `VITE_PRIVATE_FEE_BUFFER_MIN` (default `0.002` USDC)
 
-## Server CLI Env Variables
-
-Required:
-
-1. `VITE_PRIVATE_RPC` (or `RPC_URL`)
-2. `VITE_PRIVATE_EMPORIUM` (or `PRIVATE_EMPORIUM`, optional override)
-3. `VITE_SUPPLY_TOKEN` (or `SUPPLY_TOKEN`)
-4. `PRIVATE_WALLET_PRIVATE_KEY` (or `DEPLOYER_PRIVATE_KEY`)
-
-Required after adapter deploy:
-
-1. `VITE_PRIVATE_SUPPLY_ADAPTER` (or `PRIVATE_SUPPLY_ADAPTER`)
-
-## Contract Script Env Variables
-
-Required:
-
-1. `RPC_URL`
-2. `DEPLOYER_PRIVATE_KEY`
-3. `PRIVACY_EXECUTOR` (must be Hinkal Emporium address for your chain)
-4. `SUPPLY_TOKEN`
-5. `AAVE_POOL`
-6. `VAULT_FACTORY`
-
-Required after adapter deploy:
-
-1. `PRIVATE_SUPPLY_ADAPTER`
-
-## WebCLI Commands
+## Commands
 
 1. `privacy-login`
 2. `privacy-import <mnemonic>`
 3. `approve-token <amount>`
 4. `shield-token <amount>`
 5. `unshield-token <amount> [recipient]`
-6. `private-supply <amount>`
-7. `show-positions`
-8. `private-withdraw <positionId> <amount|max>`
+6. `private-balance`
+7. `private-supply <amount>`
+8. `show-positions`
+9. `private-withdraw <positionId> <amount|max>`
 
-The Server CLI uses the same command set (`help` to list). Session data is stored in `.data/privacy-session.json`.
+## Fee Reserve Guard
 
-## Expected Runtime Behavior Before Deploy Addresses Are Set
+For `private-supply` and `private-withdraw`, WebCLI estimates `flatFee` and enforces reserve:
 
-1. Build/typecheck pass.
-2. `help`, `privacy-login`, and other non-contract commands work.
-3. Contract commands fail fast with clear missing key messages:
-   - `VITE_PRIVATE_SUPPLY_ADAPTER`
-   - `PRIVATE_SUPPLY_ADAPTER`
-   - `VAULT_FACTORY`
+- `reserve = flatFee + max(flatFee * bufferBps, minBuffer)`
 
-## Deploy Sequence
+User-visible preflight lines show:
 
-1. Deploy factory:
+- supply: `flatFee`, `reserve`, `required`
+- withdraw: `flatFee`, `reserve`, `requiredPrivateBalance`
 
-```bash
-bash scripts/deploy-vault-factory.sh
-```
+## Contracts
 
-2. Deploy adapter:
+Contracts and scripts remain in `contracts/` and `scripts/`.
+Use existing deploy/smoke scripts for adapter/factory/vault integration.
 
-```bash
-bash scripts/deploy-private-supply-adapter.sh
-```
+## Handoff Notes
 
-3. Set env values from deployment output:
+For detailed integration and troubleshooting notes, see:
 
-1. `VITE_PRIVATE_SUPPLY_ADAPTER`
-2. `PRIVATE_SUPPLY_ADAPTER`
-3. `VAULT_FACTORY`
-
-4. Run sanity check:
-
-```bash
-bash scripts/sanity-check-mainnet-config.sh
-```
-
-5. Run smoke tests:
-
-```bash
-bash scripts/smoke-test-supply-adapter.sh
-bash scripts/smoke-test-withdraw-supply-adapter.sh
-```
+- `docs/hinkal-webcli-notes.md`
+- `AGENT.md`

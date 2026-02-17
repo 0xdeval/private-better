@@ -4,6 +4,12 @@ import {
   ethers,
   Wallet,
 } from 'ethers';
+import {
+  ExternalActionId,
+  convertEmporiumOpToCallInfo,
+  emporiumOp,
+  getFlatFees,
+} from '@hinkal/common';
 
 import {
   PRIVATE_CHAIN,
@@ -72,9 +78,12 @@ const ADAPTER_ABI = [
   'function getOwnerPositionIds(bytes32 zkOwnerHash, uint256 offset, uint256 limit) view returns (uint256[] ids, uint256 total)',
 ] as const;
 
-const MAX_UINT256 =
-  BigInt(ethers.constants.MaxUint256.toString());
 const TOKEN_DECIMALS = 6;
+const FEE_BPS_DENOMINATOR = 10_000n;
+const DEFAULT_PRIVATE_FEE_BUFFER_BPS = 2_000n; // 20%
+const DEFAULT_PRIVATE_FEE_BUFFER_MIN = BigInt(
+  ethers.utils.parseUnits('0.002', TOKEN_DECIMALS).toString(),
+);
 const DEFAULT_TEST_MNEMONIC =
   (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
     ?.VITE_PRIVATE_TEST_MNEMONIC;
@@ -108,7 +117,7 @@ class WebCLI {
     this.write('5) private-balance -> show spendable private token balance', 'muted');
     this.write('6) private-supply 1 -> create private supply position on Aave', 'muted');
     this.write(
-      '7) private-withdraw <positionId> <amount|max> -> withdraw from private supply position',
+      '7) private-withdraw <positionId> <amount|max> -> withdraw from Aave position to private balance',
       'muted',
     );
     this.bindInput();
@@ -253,6 +262,8 @@ class WebCLI {
         PRIVATE_SUPPLY_ADAPTER?: string;
         SUPPLY_TOKEN?: string;
         PRIVATE_DEBUG?: string;
+        PRIVATE_FEE_BUFFER_BPS?: string;
+        PRIVATE_FEE_BUFFER_MIN?: string;
       };
     };
     return win.__APP_CONFIG__ ?? {};
@@ -298,6 +309,145 @@ class WebCLI {
   private getEmporiumAddress(): string {
     const value = this.getConfig().PRIVATE_EMPORIUM ?? PRIVATE_EMPORIUM_ADDRESS;
     return this.requireEnvAddress('VITE_PRIVATE_EMPORIUM', value);
+  }
+
+  private getPrivateFeeBufferBps(): bigint {
+    const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+    const raw = this.getConfig().PRIVATE_FEE_BUFFER_BPS ?? env?.VITE_PRIVATE_FEE_BUFFER_BPS;
+    if (!raw) return DEFAULT_PRIVATE_FEE_BUFFER_BPS;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < 0) {
+      this.debug(`Invalid VITE_PRIVATE_FEE_BUFFER_BPS="${raw}". Using default ${DEFAULT_PRIVATE_FEE_BUFFER_BPS.toString()}.`);
+      return DEFAULT_PRIVATE_FEE_BUFFER_BPS;
+    }
+    return BigInt(parsed);
+  }
+
+  private getPrivateFeeBufferMin(): bigint {
+    const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+    const raw = this.getConfig().PRIVATE_FEE_BUFFER_MIN ?? env?.VITE_PRIVATE_FEE_BUFFER_MIN;
+    if (!raw) return DEFAULT_PRIVATE_FEE_BUFFER_MIN;
+    try {
+      return parseTokenAmount(raw);
+    } catch {
+      this.debug(`Invalid VITE_PRIVATE_FEE_BUFFER_MIN="${raw}". Using default ${formatTokenAmount(DEFAULT_PRIVATE_FEE_BUFFER_MIN)}.`);
+      return DEFAULT_PRIVATE_FEE_BUFFER_MIN;
+    }
+  }
+
+  private getBufferedFeeReserve(flatFee: bigint): {
+    reserve: bigint;
+    bpsBuffer: bigint;
+    minBuffer: bigint;
+    usedBuffer: bigint;
+  } {
+    const bps = this.getPrivateFeeBufferBps();
+    const minBuffer = this.getPrivateFeeBufferMin();
+    const bpsBuffer = (flatFee * bps) / FEE_BPS_DENOMINATOR;
+    const usedBuffer = bpsBuffer > minBuffer ? bpsBuffer : minBuffer;
+    return {
+      reserve: flatFee + usedBuffer,
+      bpsBuffer,
+      minBuffer,
+      usedBuffer,
+    };
+  }
+
+  private buildPrivateSupplyOps(params: {
+    adapterAddress: string;
+    tokenAddress: string;
+    amount: bigint;
+    zkOwnerHash: string;
+    withdrawAuthHash: string;
+  }): string[] {
+    const erc20Interface = new ethers.utils.Interface([
+      'function transfer(address to, uint256 amount) returns (bool)',
+    ]);
+    const adapterInterface = new ethers.utils.Interface([
+      'function onPrivateDeposit(address token, uint256 amount, bytes data) returns (uint256)',
+    ]);
+    const requestData = ethers.utils.defaultAbiCoder.encode(
+      ['tuple(bytes32 zkOwnerHash, bytes32 withdrawAuthHash)'],
+      [{ zkOwnerHash: params.zkOwnerHash, withdrawAuthHash: params.withdrawAuthHash }],
+    );
+
+    return [
+      emporiumOp({
+        contract: params.tokenAddress,
+        callDataString: erc20Interface.encodeFunctionData('transfer', [
+          params.adapterAddress,
+          params.amount,
+        ]),
+        invokeWallet: false,
+      }),
+      emporiumOp({
+        contract: params.adapterAddress,
+        callDataString: adapterInterface.encodeFunctionData('onPrivateDeposit', [
+          params.tokenAddress,
+          params.amount,
+          requestData,
+        ]),
+        invokeWallet: false,
+      }),
+    ];
+  }
+
+  private buildPrivateWithdrawOps(params: {
+    adapterAddress: string;
+    emporiumAddress: string;
+    positionId: bigint;
+    amount: bigint;
+    withdrawAuthSecret: string;
+    nextWithdrawAuthHash: string;
+  }): string[] {
+    const adapterInterface = new ethers.utils.Interface([
+      'function withdrawToRecipient(uint256 positionId, uint256 amount, bytes32 withdrawAuthSecret, bytes32 nextWithdrawAuthHash, address recipient) returns (uint256)',
+    ]);
+    return [
+      emporiumOp({
+        contract: params.adapterAddress,
+        callDataString: adapterInterface.encodeFunctionData('withdrawToRecipient', [
+          params.positionId,
+          params.amount,
+          params.withdrawAuthSecret,
+          params.nextWithdrawAuthHash,
+          params.emporiumAddress,
+        ]),
+      }),
+    ];
+  }
+
+  private async estimateEmporiumFlatFee(params: {
+    walletAddress: string;
+    feeTokenAddress: string;
+    erc20Addresses: string[];
+    ops: string[];
+  }): Promise<bigint | null> {
+    try {
+      const callInfos = params.ops.map((op) =>
+        convertEmporiumOpToCallInfo(op, params.walletAddress, PRIVATE_CHAIN.chainId),
+      );
+      const feeInfo = await getFlatFees(
+        PRIVATE_CHAIN.chainId,
+        params.erc20Addresses,
+        ExternalActionId.Emporium,
+        params.erc20Addresses.map(() => 1n),
+        params.feeTokenAddress,
+        callInfos,
+      );
+      const explicitFlatFee = feeInfo.flatFees.find((value) => value > 0n) ?? feeInfo.flatFees[0];
+      if (explicitFlatFee != null && explicitFlatFee > 0n) {
+        return explicitFlatFee;
+      }
+      if (feeInfo.priceOfTransactionInToken != null && feeInfo.priceOfTransactionInToken > 0n) {
+        return feeInfo.priceOfTransactionInToken;
+      }
+      throw new Error('fee estimate resolved to zero');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.debug(`fee-estimate unavailable: ${message}`);
+      return null;
+    }
   }
 
   private addressesEqual(a: string, b: string): boolean {
@@ -489,7 +639,9 @@ class WebCLI {
     this.write('private-balance');
     this.write('private-supply <amount>   e.g. private-supply 1.0');
     this.write('show-positions');
-    this.write('private-withdraw <positionId> <amount|max>   e.g. private-withdraw 1 max');
+    this.write(
+      'private-withdraw <positionId> <amount|max>   e.g. private-withdraw 1 max (to private balance)',
+    );
   }
 
   private async privacyLogin(ctx: CommandContext) {
@@ -700,11 +852,12 @@ class WebCLI {
       mnemonic: session.mnemonic,
       publicWallet: signer,
     });
-    const [publicBalance, allowanceToSpender, adapterExecutor, adapterToken] = await Promise.all([
+    const [publicBalance, allowanceToSpender, adapterExecutor, adapterToken, nativeBalance] = await Promise.all([
       erc20.balanceOf(signerAddress),
       erc20.allowance(signerAddress, spender),
       adapter.privacyExecutor(),
       adapter.supplyToken(),
+      provider.getBalance(signerAddress),
     ]);
     const privateSpendableBalance = await this.manager.getPrivateSpendableBalance({
       mnemonic: session.mnemonic,
@@ -725,6 +878,7 @@ class WebCLI {
     this.debug(
       `private-supply preflight: publicBalance=${formatTokenAmount(publicBalance)} allowanceToHinkal=${formatTokenAmount(allowanceToSpender)} privateSpendable=${formatTokenAmount(privateSpendableBalance)} zkOwnerHash=${zkOwnerHash}`,
     );
+    this.debug(`private-supply wallet-native: eoaEth=${ethers.utils.formatEther(nativeBalance)}`);
     this.debug(
       `private-supply signer-context: runtimeSigner=${privateActionContext.runtimeSigner ?? 'unknown'} subAccount=${privateActionContext.subAccountAddress} subAccountKey=${privateActionContext.hasSubAccountKey ? 'yes' : 'no'}`,
     );
@@ -733,22 +887,62 @@ class WebCLI {
         `Insufficient private spendable balance. Need ${amountText}, available ${formatTokenAmount(privateSpendableBalance)}.`,
       );
     }
-    const beforeIdsRaw = await adapter.getOwnerPositionIds(zkOwnerHash, 0, 500);
-    const beforeIds = (beforeIdsRaw[0] as BigNumber[]).map((id) => id.toString());
-    const beforeSet = new Set(beforeIds);
-
     const withdrawAuthSecret = ethers.utils.hexlify(ethers.utils.randomBytes(32));
     const withdrawAuthHash = ethers.utils.keccak256(withdrawAuthSecret);
-
-    const txHash = await ctx.manager.privateSupply({
-      mnemonic: session.mnemonic,
-      publicWallet: signer,
+    const supplyOps = this.buildPrivateSupplyOps({
       adapterAddress,
       tokenAddress,
       amount,
       zkOwnerHash,
       withdrawAuthHash,
     });
+    const estimatedFlatFee = await this.estimateEmporiumFlatFee({
+      walletAddress: privateActionContext.subAccountAddress,
+      feeTokenAddress: tokenAddress,
+      erc20Addresses: [tokenAddress],
+      ops: supplyOps,
+    });
+    if (estimatedFlatFee != null) {
+      const { reserve, usedBuffer, bpsBuffer, minBuffer } = this.getBufferedFeeReserve(estimatedFlatFee);
+      const requiredTotal = amount + reserve;
+      ctx.write(
+        `Fee estimate (supply): flatFee=${formatTokenAmount(estimatedFlatFee)} reserve=${formatTokenAmount(reserve)} required=${formatTokenAmount(requiredTotal)}`,
+        'muted',
+      );
+      this.debug(
+        `private-supply fee-estimate: flatFee=${formatTokenAmount(estimatedFlatFee)} buffer=${formatTokenAmount(usedBuffer)} reserve=${formatTokenAmount(reserve)} totalRequired=${formatTokenAmount(requiredTotal)} bufferBpsPart=${formatTokenAmount(bpsBuffer)} bufferMin=${formatTokenAmount(minBuffer)}`,
+      );
+      if (privateSpendableBalance < requiredTotal) {
+        throw new Error(
+          `Insufficient private spendable balance for supply + fee reserve. Need ${formatTokenAmount(requiredTotal)}, available ${formatTokenAmount(privateSpendableBalance)}.`,
+        );
+      }
+    }
+
+    const beforeIdsRaw = await adapter.getOwnerPositionIds(zkOwnerHash, 0, 500);
+    const beforeIds = (beforeIdsRaw[0] as BigNumber[]).map((id) => id.toString());
+    const beforeSet = new Set(beforeIds);
+
+    let txHash: string;
+    try {
+      txHash = await ctx.manager.privateSupply({
+        mnemonic: session.mnemonic,
+        publicWallet: signer,
+        adapterAddress,
+        tokenAddress,
+        amount,
+        zkOwnerHash,
+        withdrawAuthHash,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.toLowerCase().includes('insufficient funds')) {
+        throw new Error(
+          `Insufficient private funds for supply + Hinkal fee. Current private spendable=${formatTokenAmount(privateSpendableBalance)}. Try a smaller amount or shield more USDC first.`,
+        );
+      }
+      throw error;
+    }
     ctx.write(`Private supply tx: ${txHash}`, 'ok');
 
     const afterIdsRaw = await adapter.getOwnerPositionIds(zkOwnerHash, 0, 500);
@@ -828,9 +1022,10 @@ class WebCLI {
     await this.ensurePrivacyInitialized();
 
     const adapterAddress = this.getAdapterAddress();
+    const emporiumAddress = this.getEmporiumAddress();
+    const tokenAddress = this.getSupplyTokenAddress();
     const positionId = BigInt(positionIdText);
-    const amount =
-      amountText.toLowerCase() === 'max' ? MAX_UINT256 : parseTokenAmount(amountText);
+    const isMaxWithdraw = amountText.toLowerCase() === 'max';
     const currentSecret = session.positionSecrets[positionId.toString()];
     if (!currentSecret) {
       throw new Error(
@@ -838,30 +1033,114 @@ class WebCLI {
       );
     }
 
-    const nextSecret =
-      amount === MAX_UINT256 ? null : ethers.utils.hexlify(ethers.utils.randomBytes(32));
-    const nextWithdrawAuthHash =
-      nextSecret == null
-        ? '0x0000000000000000000000000000000000000000000000000000000000000000'
-        : ethers.utils.keccak256(nextSecret);
-
     const { provider, signerAddress } = await ctx.getSigner();
     this.assertSessionEoa(session, signerAddress);
     const signer = await this.getBoundSigner(provider, signerAddress);
-    const txHash = await ctx.manager.privateWithdraw({
-      mnemonic: session.mnemonic,
-      publicWallet: signer,
+    const adapter = new Contract(adapterAddress, ADAPTER_ABI, provider) as any;
+    const positionBefore = await adapter.positions(positionId);
+    const positionAmount = BigInt((positionBefore[3] as BigNumber).toString());
+    if (positionAmount <= 0n) {
+      throw new Error(`Position ${positionId.toString()} has no withdrawable amount.`);
+    }
+
+    let amount = isMaxWithdraw ? positionAmount : parseTokenAmount(amountText);
+    if (!isMaxWithdraw && amount > positionAmount) {
+      throw new Error(
+        `Withdraw amount exceeds position balance. Requested ${amountText}, available ${formatTokenAmount(positionAmount)}.`,
+      );
+    }
+
+    const nextSecret = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const nextWithdrawAuthHash = ethers.utils.keccak256(nextSecret);
+    const [privateSpendableBalance, privateActionContext] = await Promise.all([
+      this.manager.getPrivateSpendableBalance({
+        mnemonic: session.mnemonic,
+        tokenAddress,
+        publicWallet: signer,
+      }),
+      this.manager.getPrivateActionContext({
+        mnemonic: session.mnemonic,
+        publicWallet: signer,
+      }),
+    ]);
+    const withdrawOps = this.buildPrivateWithdrawOps({
       adapterAddress,
-      tokenAddress: this.getSupplyTokenAddress(),
+      emporiumAddress,
       positionId,
       amount,
       withdrawAuthSecret: currentSecret,
       nextWithdrawAuthHash,
-      recipientAddress: signerAddress,
     });
+    const estimatedFlatFee = await this.estimateEmporiumFlatFee({
+      walletAddress: privateActionContext.subAccountAddress,
+      feeTokenAddress: tokenAddress,
+      erc20Addresses: [tokenAddress],
+      ops: withdrawOps,
+    });
+    if (estimatedFlatFee != null) {
+      const { reserve, usedBuffer, bpsBuffer, minBuffer } = this.getBufferedFeeReserve(estimatedFlatFee);
+      ctx.write(
+        `Fee estimate (withdraw): flatFee=${formatTokenAmount(estimatedFlatFee)} reserve=${formatTokenAmount(reserve)} requiredPrivateBalance=${formatTokenAmount(reserve)}`,
+        'muted',
+      );
+      this.debug(
+        `private-withdraw fee-estimate: flatFee=${formatTokenAmount(estimatedFlatFee)} buffer=${formatTokenAmount(usedBuffer)} reserve=${formatTokenAmount(reserve)} privateSpendable=${formatTokenAmount(privateSpendableBalance)} bufferBpsPart=${formatTokenAmount(bpsBuffer)} bufferMin=${formatTokenAmount(minBuffer)}`,
+      );
+      if (privateSpendableBalance < reserve) {
+        throw new Error(
+          `Insufficient private spendable balance for withdraw fee reserve. Need ${formatTokenAmount(reserve)}, available ${formatTokenAmount(privateSpendableBalance)}. Shield more USDC before withdrawing.`,
+        );
+      }
+    }
+    this.debug(
+      `private-withdraw: eoa=${signerAddress} private=${session.privateAddress} token=${tokenAddress} positionId=${positionId.toString()} requested=${amountText} amount=${formatTokenAmount(amount)}`,
+    );
+    this.debug(
+      `private-withdraw contracts: adapter=${adapterAddress} emporium=${emporiumAddress} positionAmount=${formatTokenAmount(positionAmount)}`,
+    );
+    this.write('Withdrawing from Aave position to private balance...', 'muted');
+
+    let txHash: string;
+    try {
+      txHash = await ctx.manager.privateWithdraw({
+        mnemonic: session.mnemonic,
+        publicWallet: signer,
+        adapterAddress,
+        emporiumAddress,
+        tokenAddress,
+        positionId,
+        amount,
+        withdrawAuthSecret: currentSecret,
+        nextWithdrawAuthHash,
+      });
+    } catch (error) {
+      const errorText = String(error).toLowerCase();
+      const isAaveMaxDustError =
+        isMaxWithdraw &&
+        amount > 1n &&
+        (errorText.includes('47bc4b2c') || errorText.includes('notenoughavailableuserbalance'));
+      if (!isAaveMaxDustError) {
+        throw error;
+      }
+
+      amount -= 1n;
+      this.debug(
+        `private-withdraw max fallback: retrying with ${formatTokenAmount(amount)} due to Aave available-balance rounding`,
+      );
+      txHash = await ctx.manager.privateWithdraw({
+        mnemonic: session.mnemonic,
+        publicWallet: signer,
+        adapterAddress,
+        emporiumAddress,
+        tokenAddress,
+        positionId,
+        amount,
+        withdrawAuthSecret: currentSecret,
+        nextWithdrawAuthHash,
+      });
+    }
     ctx.write(`Private withdraw tx: ${txHash}`, 'ok');
 
-    const adapter = new Contract(adapterAddress, ADAPTER_ABI, provider) as any;
     const position = await adapter.positions(positionId);
     const remainingAmount = position[3] as BigNumber;
     if (remainingAmount.isZero()) {
@@ -871,11 +1150,7 @@ class WebCLI {
       return;
     }
 
-    if (nextSecret == null) {
-      delete session.positionSecrets[positionId.toString()];
-    } else {
-      session.positionSecrets[positionId.toString()] = nextSecret;
-    }
+    session.positionSecrets[positionId.toString()] = nextSecret;
     await this.saveActiveSession();
     ctx.write(
       `Position ${positionId.toString()} updated. Remaining amount=${formatTokenAmount(remainingAmount)}. Secret rotated.`,

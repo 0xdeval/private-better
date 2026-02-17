@@ -27,6 +27,7 @@ type HinkalLike = {
   initUserKeysFromSeedPhrases: (seedPhrases: string[]) => Promise<void>;
   resetMerkle: (chains?: number[]) => Promise<void>;
   checkAccessToken: (chainId: number) => Promise<boolean>;
+  getRecipientInfo?: () => string;
   userKeys?: {
     getShieldedPrivateKey?: () => string;
     getShieldedPublicKey?: () => string;
@@ -60,6 +61,17 @@ type HinkalLike = {
     emporiumTokenChanges: Array<{ token: HinkalToken; amount: bigint }>,
     subAccount: HinkalSubAccount,
     feeToken?: string,
+    feeStructure?: unknown,
+    relay?: string,
+    isRelayerOff?: boolean,
+    autoDepositBackGasLimit?: unknown,
+    adminData?: unknown,
+    recipientData?: {
+      recipientInfo: string;
+      amount: bigint;
+      token: HinkalToken;
+    },
+    isSandbox?: boolean,
   ) => Promise<unknown>;
 };
 
@@ -163,6 +175,14 @@ export class HinkalManager {
       ethAddress: subAccountAddress,
       privateKey: subAccountPrivateKey,
     };
+  }
+
+  private getPrivateRecipientInfo(hinkal: HinkalLike): string {
+    const recipientInfo = hinkal.getRecipientInfo?.();
+    if (!recipientInfo) {
+      throw new Error('Hinkal recipient info is unavailable; cannot complete private withdraw.');
+    }
+    return recipientInfo;
   }
 
   private async assertRuntimeSignerAddress(
@@ -381,17 +401,19 @@ export class HinkalManager {
   async privateWithdraw(params: {
     mnemonic: string;
     adapterAddress: string;
+    emporiumAddress: string;
     tokenAddress: string;
     positionId: bigint;
     amount: bigint;
     withdrawAuthSecret: string;
     nextWithdrawAuthHash: string;
-    recipientAddress: string;
     publicWallet: Signer;
   }): Promise<string> {
     const hinkal = await this.getSessionHinkal(params.mnemonic, params.publicWallet);
     const signerAddress = await params.publicWallet.getAddress();
     await this.assertRuntimeSignerAddress(hinkal, signerAddress);
+    const token = this.createToken(params.tokenAddress);
+    const recipientInfo = this.getPrivateRecipientInfo(hinkal);
     const adapterInterface = new ethers.utils.Interface([
       'function withdrawToRecipient(uint256 positionId, uint256 amount, bytes32 withdrawAuthSecret, bytes32 nextWithdrawAuthHash, address recipient) returns (uint256)',
     ]);
@@ -403,7 +425,7 @@ export class HinkalManager {
         params.amount,
         params.withdrawAuthSecret,
         params.nextWithdrawAuthHash,
-        params.recipientAddress,
+        params.emporiumAddress,
       ]),
     });
 
@@ -414,13 +436,23 @@ export class HinkalManager {
 
     const result = await hinkal.actionPrivateWallet(
       this.getChainId(),
-      [],
-      [],
-      [],
+      [token],
+      [0n],
+      [false],
       [op],
-      [],
+      [{ token, amount: params.amount }],
       subAccount,
       params.tokenAddress,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        recipientInfo,
+        amount: params.amount,
+        token,
+      },
     );
 
     return this.txHashFromResult(result, 'private-withdraw');

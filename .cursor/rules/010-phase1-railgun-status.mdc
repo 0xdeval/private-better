@@ -1,7 +1,11 @@
 ---
-description: Phase 1 Railgun integration status and implementation notes for Private Better. Use this as handoff context for future agents.
+description: Historical Phase 1 Railgun notes (deprecated for current Hinkal WebCLI flow).
 globs: *
 ---
+
+> Historical context only. Current canonical state is in:
+> - `.cursor/rules/000-general-project-context.mdc`
+> - `.cursor/rules/050-hinkal-webcli-handoff.mdc`
 
 # PHASE 1 STATUS (RAILGUN INTEGRATION)
 

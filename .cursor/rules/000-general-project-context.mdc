@@ -1,42 +1,46 @@
 ---
-description: General project context for Private Better after pivot to private Aave supply/borrow flows.
+description: Current canonical context for Private Better (Hinkal + private Aave WebCLI).
 globs: *
 ---
 
 # PROJECT CONTEXT
 
-We are building a private DeFi MVP for Arbitrum ecosystem eligibility.
-The current direction is private supply (and later private borrow), not prediction markets.
+Private Better currently runs a Hinkal-first private DeFi flow on Arbitrum.
+The active product surface is the browser WebCLI (`src/webcli/app.ts`).
 
-# ARCHITECTURE (STRICT)
+# ACTIVE ARCHITECTURE (STRICT)
 
-1. **Shield:** User moves public funds to private Railgun balance.
-2. **Unshield Callback:** Railgun unshields to our adapter contract.
-3. **Adapter Routing:** Adapter routes funds to user-isolated vault (`zkOwnerHash` keyed via factory).
-4. **Yield Action:** Vault supplies funds to Aave pool.
-5. **Privacy:** User public wallet is never used as strategy account identity.
-6. **Later:** Withdraw/borrow outputs are shielded back to user private balance.
+1. User signs with injected wallet (Rabby/MetaMask/Coinbase).
+2. Hinkal session is initialized from mnemonic and wallet signer.
+3. Public USDC can be shielded/unshielded via Hinkal contract.
+4. Private supply uses Emporium ops:
+   - transfer USDC from Emporium to adapter,
+   - call adapter `onPrivateDeposit(...)`.
+5. Adapter supplies into per-owner vault/Aave position.
+6. Private withdraw executes adapter `withdrawToRecipient(...)` and returns funds to private balance.
 
 # TECH STACK
 
-- **Frontend:** React + TypeScript + Tailwind CSS
+- **Frontend:** TypeScript + Vite WebCLI
 - **Package manager:** bun v1.2.17+
 - **Smart Contracts:** Solidity ^0.8.20 (Foundry)
-- **Web3:** Ethers.js v6
-- **Privacy:** `@railgun-community/wallet`, `@railgun-community/engine`
-- **Yield Protocol:** Aave (target real chain), MockAavePool for early iteration
-- **Network (dev):** Ethereum Sepolia (current integration) + mocks where needed
-- **Network (final):** Arbitrum One / Arbitrum-supported deployment
+- **Web3:** Ethers.js v5.7.2
+- **Privacy SDK:** `@hinkal/common`
+- **Yield Protocol:** Aave via custom adapter/vault contracts
+- **Network:** Arbitrum One (chainId 42161)
 
 # CODING RULES
 
 1. **MVP First:** Prefer simple, verifiable happy-path implementations.
-2. **Privacy First:** Keep user public wallet out of protocol-account identity.
-3. **Isolation First:** Use one-vault-per-`zkOwnerHash` to avoid multi-user state mixing.
-4. **No Hallucinations:** If unsure about Railgun/Aave method signatures, verify from installed code/docs.
-5. **Mock Early:** Use `MockAavePool` and `MockRailgun` to unblock flow validation.
+2. **Privacy First:** Keep supply/withdraw identity private via Hinkal action flow.
+3. **Isolation First:** Preserve one-vault-per-`zkOwnerHash`.
+4. **No Hallucinations:** Verify method signatures from installed SDK/contracts.
+5. **Do Not Edit `node_modules`:** Fix via app code or config only.
 
-# DEPLOYMENT TARGETS
+# OPERATIONAL NOTES
 
-- **Local/dev validation:** Ethereum Sepolia with mocks or real Aave depending on stage.
-- **Final hackathon deployment:** Arbitrum-compatible contracts and addresses.
+1. `private-withdraw` is private-destination by default (not public recipient).
+2. Position secrets are stored locally and rotated on partial withdraw.
+3. Hinkal fees are runtime-estimated; keep private USDC reserve.
+4. Fee reserve guard is implemented in WebCLI preflight for supply/withdraw.
+5. Older `.cursor/rules` files mentioning Railgun phases are historical context only.
