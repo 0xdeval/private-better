@@ -57,18 +57,6 @@ is_address() {
 
 load_dotenv "${ENV_FILE}"
 
-resolve_env() {
-  local target="$1"
-  shift
-  for key in "$@"; do
-    if [[ -n "${!key:-}" ]]; then
-      export "${target}=${!key}"
-      return 0
-    fi
-  done
-  return 1
-}
-
 if ! command -v forge >/dev/null 2>&1; then
   echo "Error: forge is not installed or not in PATH." >&2
   exit 1
@@ -79,37 +67,37 @@ if ! command -v cast >/dev/null 2>&1; then
   exit 1
 fi
 
-resolve_env RPC_URL RPC_URL AMOY_RPC_URL || true
-resolve_env RAILGUN_CALLBACK_SENDER RAILGUN_CALLBACK_SENDER AMOY_RAILGUN_CALLBACK_SENDER || true
-resolve_env RAILGUN_SHIELD RAILGUN_SHIELD AMOY_RAILGUN_SHIELD || true
-resolve_env AAVE_POOL AAVE_POOL AMOY_AAVE_POOL || true
-resolve_env SUPPLY_TOKEN SUPPLY_TOKEN USDC AMOY_USDC || true
-resolve_env VAULT_FACTORY VAULT_FACTORY AMOY_VAULT_FACTORY || true
-
 require_env RPC_URL
 require_env DEPLOYER_PRIVATE_KEY
-require_env RAILGUN_CALLBACK_SENDER
-require_env RAILGUN_SHIELD
 require_env AAVE_POOL
 require_env SUPPLY_TOKEN
 require_env VAULT_FACTORY
+
+PRIVACY_EXECUTOR="${PRIVATE_EMPORIUM:-${PRIVACY_EXECUTOR:-}}"
+if [[ -z "${PRIVACY_EXECUTOR}" ]]; then
+  echo "Error: set PRIVATE_EMPORIUM (preferred) or PRIVACY_EXECUTOR in .env" >&2
+  exit 1
+fi
 
 if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   echo "Error: DEPLOYER_PRIVATE_KEY must be 0x + 64 hex chars." >&2
   exit 1
 fi
 
-for key in RAILGUN_CALLBACK_SENDER RAILGUN_SHIELD AAVE_POOL SUPPLY_TOKEN VAULT_FACTORY; do
+for key in AAVE_POOL SUPPLY_TOKEN VAULT_FACTORY; do
   if ! is_address "${!key}"; then
     echo "Error: ${key} must be a valid 0x address." >&2
     exit 1
   fi
 done
+if ! is_address "${PRIVACY_EXECUTOR}"; then
+  echo "Error: PRIVATE_EMPORIUM/PRIVACY_EXECUTOR must be a valid 0x address." >&2
+  exit 1
+fi
 
 echo "Deploying PrivateSupplyAdapter..."
 echo "RPC:              ${RPC_URL}"
-echo "Callback sender:  ${RAILGUN_CALLBACK_SENDER}"
-echo "Railgun shield:   ${RAILGUN_SHIELD}"
+echo "Emporium caller:  ${PRIVACY_EXECUTOR}"
 echo "Aave pool:        ${AAVE_POOL}"
 echo "Supply token:     ${SUPPLY_TOKEN}"
 echo "Vault factory:    ${VAULT_FACTORY}"
@@ -119,8 +107,7 @@ DEPLOY_OUTPUT="$(forge create contracts/PrivateSupplyAdapter.sol:PrivateSupplyAd
   --private-key "${DEPLOYER_PRIVATE_KEY}" \
   --broadcast \
   --constructor-args \
-  "${RAILGUN_CALLBACK_SENDER}" \
-  "${RAILGUN_SHIELD}" \
+  "${PRIVACY_EXECUTOR}" \
   "${AAVE_POOL}" \
   "${SUPPLY_TOKEN}" \
   "${VAULT_FACTORY}" 2>&1)"
@@ -136,16 +123,16 @@ if [[ -z "${ADAPTER_ADDRESS}" ]]; then
   else
     echo "Error: could not parse deployed address from forge output." >&2
     echo "If needed, run manually:" >&2
-    echo "forge create contracts/PrivateSupplyAdapter.sol:PrivateSupplyAdapter --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast --constructor-args \"\$RAILGUN_CALLBACK_SENDER\" \"\$RAILGUN_SHIELD\" \"\$AAVE_POOL\" \"\$SUPPLY_TOKEN\" \"\$VAULT_FACTORY\"" >&2
+    echo "forge create contracts/PrivateSupplyAdapter.sol:PrivateSupplyAdapter --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast --constructor-args \"\${PRIVATE_EMPORIUM:-\$PRIVACY_EXECUTOR}\" \"\$AAVE_POOL\" \"\$SUPPLY_TOKEN\" \"\$VAULT_FACTORY\"" >&2
   fi
   exit 1
 fi
 
 echo
 echo "PrivateSupplyAdapter deployed at: ${ADAPTER_ADDRESS}"
-echo "Add/update this in .env:"
+echo "Add/update these in .env:"
 echo "PRIVATE_SUPPLY_ADAPTER=${ADAPTER_ADDRESS}"
-echo "(legacy fallback still accepted: AMOY_PRIVATE_SUPPLY_ADAPTER=${ADAPTER_ADDRESS})"
+echo "VITE_PRIVATE_SUPPLY_ADAPTER=${ADAPTER_ADDRESS}"
 echo
 echo "Setting factory adapter..."
 cast send "${VAULT_FACTORY}" \

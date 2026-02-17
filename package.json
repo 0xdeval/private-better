@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev:web": "bunx --bun vite --force --port 3017 --strictPort",
+    "dev:cli": "bun run src/servercli/entry.ts",
     "build:web": "bunx --bun vite build",
     "preview:web": "bunx --bun vite preview --port 3017",
     "typecheck": "tsc --noEmit"
@@ -12,7 +13,6 @@
   "devDependencies": {
     "@rollup/rollup-darwin-x64": "^4.57.1",
     "@types/bun": "latest",
-    "@types/level-js": "^4.0.5",
     "vite": "6.4.0",
     "vite-plugin-node-polyfills": "^0.25.0"
   },
@@ -20,23 +20,18 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@bgd-labs/aave-address-book": "^4.44.15",
-    "@railgun-community/shared-models": "7.6.1",
-    "@railgun-community/wallet": "10.4.0",
-    "@types/snarkjs": "^0.7.9",
+    "@hinkal/common": "latest",
     "assert": "^2.1.0",
     "browserify-zlib": "^0.2.0",
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",
-    "ethers": "6.13.1",
+    "ethers": "5.7.2",
     "events": "^3.3.0",
     "http-browserify": "^1.7.0",
     "https-browserify": "^1.0.0",
-    "level-js": "^6.1.0",
     "os-browserify": "^0.3.0",
     "path-browserify": "^1.0.1",
     "process": "^0.11.10",
-    "snarkjs": "^0.7.6",
     "stream-browserify": "^3.0.0",
     "url": "^0.11.4",
     "util": "^0.12.5",

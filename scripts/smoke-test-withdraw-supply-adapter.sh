@@ -43,18 +43,6 @@ load_dotenv() {
   done < "${file}"
 }
 
-resolve_env() {
-  local target="$1"
-  shift
-  for key in "$@"; do
-    if [[ -n "${!key:-}" ]]; then
-      export "${target}=${!key}"
-      return 0
-    fi
-  done
-  return 1
-}
-
 require_env() {
   local key="$1"
   if [[ -z "${!key:-}" ]]; then
@@ -81,6 +69,9 @@ normalize_uint_output() {
   local value="$1"
   value="$(echo "${value}" | tr -d '[:space:]')"
   value="${value%%\[*}"
+  if [[ "${value}" == 0x* || "${value}" == 0X* ]]; then
+    value="$(cast to-dec "${value}")"
+  fi
   printf '%s' "${value}"
 }
 
@@ -95,13 +86,6 @@ if ! command -v bun >/dev/null 2>&1; then
   echo "Error: bun is not installed or not in PATH." >&2
   exit 1
 fi
-
-resolve_env RPC_URL RPC_URL AMOY_RPC_URL || true
-resolve_env PRIVATE_SUPPLY_ADAPTER PRIVATE_SUPPLY_ADAPTER AMOY_PRIVATE_SUPPLY_ADAPTER || true
-resolve_env SUPPLY_TOKEN SUPPLY_TOKEN USDC AMOY_USDC || true
-resolve_env AAVE_POOL AAVE_POOL AMOY_AAVE_POOL || true
-resolve_env VAULT_FACTORY VAULT_FACTORY AMOY_VAULT_FACTORY || true
-resolve_env MOCK_RAILGUN MOCK_RAILGUN AMOY_MOCK_RAILGUN || true
 
 require_env RPC_URL
 require_env DEPLOYER_PRIVATE_KEY
@@ -122,33 +106,24 @@ for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY; do
   fi
 done
 
-SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}" # 1 token if decimals=6
+SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}"
 SMOKE_WITHDRAW_AMOUNT="${SMOKE_WITHDRAW_AMOUNT:-${SMOKE_STAKE_AMOUNT}}"
 SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL:-zk-owner-withdraw-smoke-$(date +%s)}"
 SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-withdraw-secret-withdraw-smoke-$(date +%s)}"
-SMOKE_SET_CALLBACK_TO_DEPLOYER="${SMOKE_SET_CALLBACK_TO_DEPLOYER:-true}"
-SMOKE_SET_SHIELD_TO_MOCK="${SMOKE_SET_SHIELD_TO_MOCK:-false}"
-SMOKE_RESTORE_CALLBACK="${SMOKE_RESTORE_CALLBACK:-true}"
-SMOKE_RESTORE_SHIELD="${SMOKE_RESTORE_SHIELD:-true}"
+SMOKE_SET_EXECUTOR_TO_DEPLOYER="${SMOKE_SET_EXECUTOR_TO_DEPLOYER:-true}"
+SMOKE_RESTORE_EXECUTOR="${SMOKE_RESTORE_EXECUTOR:-true}"
 
 if [[ "$(echo "${SMOKE_WITHDRAW_AMOUNT}" | tr '[:upper:]' '[:lower:]')" == "max" ]]; then
   SMOKE_WITHDRAW_AMOUNT="115792089237316195423570985008687907853269984665640564039457584007913129639935"
 fi
 
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "${DEPLOYER_PRIVATE_KEY}")"
-ORIGINAL_CALLBACK="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "railgunCallbackSender()(address)" --rpc-url "${RPC_URL}")"
-ORIGINAL_SHIELD="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "railgunShield()(address)" --rpc-url "${RPC_URL}")"
+ORIGINAL_EXECUTOR="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "privacyExecutor()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_TOKEN="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "supplyToken()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_POOL="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "aavePool()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_FACTORY="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "vaultFactory()(address)" --rpc-url "${RPC_URL}")"
-AAVE_RESERVE_ATOKEN=""
-if RESERVE_DATA="$(
-  cast call "${AAVE_POOL}" \
-    "getReserveData(address)((uint256,uint128,uint128,uint128,uint128,uint128,uint40,uint16,address,address,address,address,uint128,uint128,uint128))" \
-    "${SUPPLY_TOKEN}" --rpc-url "${RPC_URL}" 2>/dev/null
-)"; then
-  AAVE_RESERVE_ATOKEN="$(echo "${RESERVE_DATA}" | grep -Eo '0x[0-9a-fA-F]{40}' | sed -n '1p')"
-fi
+DEPLOYER_TOKEN_BALANCE_RAW="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${DEPLOYER_ADDRESS}" --rpc-url "${RPC_URL}")"
+DEPLOYER_TOKEN_BALANCE="$(normalize_uint_output "${DEPLOYER_TOKEN_BALANCE_RAW}")"
 
 echo "Starting PrivateSupplyAdapter withdraw smoke test"
 echo "RPC:               ${RPC_URL}"
@@ -160,12 +135,9 @@ echo "Token (env):       ${SUPPLY_TOKEN}"
 echo "Token (adp):       ${ADAPTER_TOKEN}"
 echo "Factory (env):     ${VAULT_FACTORY}"
 echo "Factory (adp):     ${ADAPTER_FACTORY}"
-echo "Original callback: ${ORIGINAL_CALLBACK}"
-echo "Original shield:   ${ORIGINAL_SHIELD}"
-if [[ -n "${AAVE_RESERVE_ATOKEN}" ]]; then
-  echo "Aave reserve aToken: ${AAVE_RESERVE_ATOKEN}"
-fi
+echo "Original executor: ${ORIGINAL_EXECUTOR}"
 echo "Withdraw amount (raw): ${SMOKE_WITHDRAW_AMOUNT}"
+echo "Deployer token bal: ${DEPLOYER_TOKEN_BALANCE}"
 
 if [[ "$(to_lower "${ADAPTER_TOKEN}")" != "$(to_lower "${SUPPLY_TOKEN}")" ]]; then
   echo "Error: adapter supplyToken() does not match SUPPLY_TOKEN." >&2
@@ -179,42 +151,41 @@ if [[ "$(to_lower "${ADAPTER_FACTORY}")" != "$(to_lower "${VAULT_FACTORY}")" ]];
   echo "Error: adapter vaultFactory() does not match VAULT_FACTORY." >&2
   exit 1
 fi
+if ! [[ "${DEPLOYER_TOKEN_BALANCE}" =~ ^[0-9]+$ ]]; then
+  echo "Error: could not parse deployer token balance: ${DEPLOYER_TOKEN_BALANCE_RAW}" >&2
+  exit 1
+fi
+if (( DEPLOYER_TOKEN_BALANCE < SMOKE_STAKE_AMOUNT )); then
+  echo "Error: deployer token balance is lower than SMOKE_STAKE_AMOUNT." >&2
+  echo "Required (raw): ${SMOKE_STAKE_AMOUNT}" >&2
+  echo "Current  (raw): ${DEPLOYER_TOKEN_BALANCE}" >&2
+  echo "Top up SUPPLY_TOKEN for ${DEPLOYER_ADDRESS} or run with a lower amount." >&2
+  echo "Example: SMOKE_STAKE_AMOUNT=1000 bash scripts/smoke-test-withdraw-supply-adapter.sh" >&2
+  exit 1
+fi
 
-if is_true "${SMOKE_SET_CALLBACK_TO_DEPLOYER}"; then
-  echo "Step 1/8: Setting callback sender to deployer..."
+if is_true "${SMOKE_SET_EXECUTOR_TO_DEPLOYER}"; then
+  echo "Step 1/7: Setting executor to deployer..."
   cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setRailgunCallbackSender(address)" "${DEPLOYER_ADDRESS}" \
+    "setPrivacyExecutor(address)" "${DEPLOYER_ADDRESS}" \
     --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 fi
 
-if is_true "${SMOKE_SET_SHIELD_TO_MOCK}"; then
-  require_env MOCK_RAILGUN
-  if ! is_address "${MOCK_RAILGUN}"; then
-    echo "Error: MOCK_RAILGUN must be a valid 0x address." >&2
-    exit 1
-  fi
-  echo "Step 2/8: Setting railgunShield to MOCK_RAILGUN..."
-  cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setRailgunShield(address)" "${MOCK_RAILGUN}" \
-    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
-else
-  echo "Step 2/8: Keeping existing railgunShield address."
-fi
-
-echo "Step 3/8: Funding adapter with stake token..."
+echo "Step 2/7: Funding adapter with stake token..."
 cast send "${SUPPLY_TOKEN}" \
   "transfer(address,uint256)" "${PRIVATE_SUPPLY_ADAPTER}" "${SMOKE_STAKE_AMOUNT}" \
   --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 
-echo "Step 4/8: Building supply request..."
+echo "Step 3/7: Building supply request..."
 REQUEST_DATA="$(
   SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
   bun -e '
-    import { AbiCoder, keccak256, toUtf8Bytes } from "ethers";
+    import { ethers } from "ethers";
+    const { keccak256, toUtf8Bytes, defaultAbiCoder } = ethers.utils;
     const zkOwnerHash = keccak256(toUtf8Bytes(process.env.SMOKE_ZK_OWNER_LABEL ?? "zk-owner-withdraw-smoke"));
     const withdrawSecret = keccak256(toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-withdraw-smoke"));
     const withdrawAuthHash = keccak256(withdrawSecret);
-    const coder = AbiCoder.defaultAbiCoder();
+    const coder = defaultAbiCoder;
     console.log(coder.encode(["tuple(bytes32,bytes32)"], [[zkOwnerHash, withdrawAuthHash]]));
   '
 )"
@@ -223,20 +194,21 @@ NEXT_POSITION_ID_RAW="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "nextPositionId()(
 NEXT_POSITION_ID="$(normalize_uint_output "${NEXT_POSITION_ID_RAW}")"
 EXPECTED_POSITION_ID=$((NEXT_POSITION_ID + 1))
 
-echo "Step 5/8: Calling onRailgunUnshield..."
+echo "Step 4/7: Calling onPrivateDeposit..."
 cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-  "onRailgunUnshield(address,uint256,bytes)" "${SUPPLY_TOKEN}" "${SMOKE_STAKE_AMOUNT}" "${REQUEST_DATA}" \
+  "onPrivateDeposit(address,uint256,bytes)" "${SUPPLY_TOKEN}" "${SMOKE_STAKE_AMOUNT}" "${REQUEST_DATA}" \
   --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 
 WITHDRAW_SECRET="$(
   SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
-  bun -e 'import { keccak256, toUtf8Bytes } from "ethers"; console.log(keccak256(toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-withdraw-smoke")));'
+  bun -e 'import { ethers } from "ethers"; console.log(ethers.utils.keccak256(ethers.utils.toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-withdraw-smoke")));'
 )"
 
 NEXT_WITHDRAW_AUTH_HASH="$(
   SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" SMOKE_WITHDRAW_AMOUNT="${SMOKE_WITHDRAW_AMOUNT}" \
   bun -e '
-    import { keccak256, toUtf8Bytes } from "ethers";
+    import { ethers } from "ethers";
+    const { keccak256, toUtf8Bytes } = ethers.utils;
     const amount = (process.env.SMOKE_WITHDRAW_AMOUNT ?? "").toLowerCase();
     if (amount === "115792089237316195423570985008687907853269984665640564039457584007913129639935") {
       console.log("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -247,52 +219,32 @@ NEXT_WITHDRAW_AUTH_HASH="$(
   '
 )"
 
-VAULT_ADDRESS="$(cast call "${VAULT_FACTORY}" \
-  "vaultOfZkOwner(bytes32)(address)" \
-  "$(SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" bun -e 'import { keccak256, toUtf8Bytes } from "ethers"; console.log(keccak256(toUtf8Bytes(process.env.SMOKE_ZK_OWNER_LABEL ?? "zk-owner-withdraw-smoke")));')" \
-  --rpc-url "${RPC_URL}")"
+RECIPIENT="${SMOKE_WITHDRAW_RECIPIENT:-${DEPLOYER_ADDRESS}}"
+BEFORE_RECIPIENT_BALANCE="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${RECIPIENT}" --rpc-url "${RPC_URL}")"
 
-ADAPTER_BALANCE_BEFORE="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${PRIVATE_SUPPLY_ADAPTER}" --rpc-url "${RPC_URL}")"
-echo "Pre-withdraw adapter token balance: ${ADAPTER_BALANCE_BEFORE}"
-if [[ -n "${AAVE_RESERVE_ATOKEN}" && "${AAVE_RESERVE_ATOKEN}" != "0x0000000000000000000000000000000000000000" ]]; then
-  VAULT_ATOKEN_BALANCE="$(cast call "${AAVE_RESERVE_ATOKEN}" "balanceOf(address)(uint256)" "${VAULT_ADDRESS}" --rpc-url "${RPC_URL}")"
-  echo "Pre-withdraw vault aToken balance: ${VAULT_ATOKEN_BALANCE}"
-fi
+echo "Step 5/7: Calling withdrawToRecipient..."
+cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+  "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)" "${EXPECTED_POSITION_ID}" "${SMOKE_WITHDRAW_AMOUNT}" "${WITHDRAW_SECRET}" "${NEXT_WITHDRAW_AUTH_HASH}" "${RECIPIENT}" \
+  --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 
-echo "Step 6/8: Calling withdrawAndShield..."
-WITHDRAW_OUTPUT="$(cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-  "withdrawAndShield(uint256,uint256,bytes32,bytes32)" "${EXPECTED_POSITION_ID}" "${SMOKE_WITHDRAW_AMOUNT}" "${WITHDRAW_SECRET}" "${NEXT_WITHDRAW_AUTH_HASH}" \
-  --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" 2>&1)" || {
-  echo "${WITHDRAW_OUTPUT}" >&2
-  echo "Hint: on real Aave, use SMOKE_WITHDRAW_AMOUNT=max to avoid exact-amount rounding issues." >&2
-  exit 1
-}
-
-echo "Step 7/8: Reading updated position..."
+echo "Step 6/7: Reading updated position..."
 POSITION="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
   "positions(uint256)(bytes32,address,address,uint256,bytes32)" "${EXPECTED_POSITION_ID}" \
   --rpc-url "${RPC_URL}")"
+AFTER_RECIPIENT_BALANCE="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${RECIPIENT}" --rpc-url "${RPC_URL}")"
+
 echo "Position: ${POSITION}"
+echo "Recipient balance before: ${BEFORE_RECIPIENT_BALANCE}"
+echo "Recipient balance after:  ${AFTER_RECIPIENT_BALANCE}"
 
-if is_true "${SMOKE_SET_SHIELD_TO_MOCK}"; then
-  MOCK_RAILGUN_BALANCE="$(cast call "${SUPPLY_TOKEN}" \
-    "balanceOf(address)(uint256)" "${MOCK_RAILGUN}" --rpc-url "${RPC_URL}")"
-  echo "Mock railgun token balance: ${MOCK_RAILGUN_BALANCE}"
-fi
-
-echo "Step 8/8: Restoring adapter config..."
-if is_true "${SMOKE_RESTORE_CALLBACK}"; then
+echo "Step 7/7: Restoring executor..."
+if is_true "${SMOKE_RESTORE_EXECUTOR}"; then
   cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setRailgunCallbackSender(address)" "${ORIGINAL_CALLBACK}" \
-    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
-fi
-if is_true "${SMOKE_RESTORE_SHIELD}"; then
-  cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setRailgunShield(address)" "${ORIGINAL_SHIELD}" \
+    "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
     --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 fi
 
 echo
 echo "Withdraw smoke test completed."
 echo "- position id: ${EXPECTED_POSITION_ID}"
-echo "- if using MOCK_RAILGUN, token balance should increase by withdrawn amount."
+echo "- recipient: ${RECIPIENT}"

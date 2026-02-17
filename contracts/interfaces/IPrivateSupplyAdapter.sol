@@ -2,17 +2,18 @@
 pragma solidity ^0.8.20;
 
 interface IPrivateSupplyAdapter {
-  function onRailgunUnshield(
+  function onPrivateDeposit(
     address token,
     uint256 amount,
     bytes calldata data
   ) external returns (uint256 positionId);
 
-  function withdrawAndShield(
+  function withdrawToRecipient(
     uint256 positionId,
     uint256 amount,
     bytes32 withdrawAuthSecret,
-    bytes32 nextWithdrawAuthHash
+    bytes32 nextWithdrawAuthHash,
+    address recipient
   ) external returns (uint256 withdrawnAmount);
 
   function getOwnerPositionIds(

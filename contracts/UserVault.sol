@@ -27,9 +27,15 @@ contract UserVault {
     IAavePool(aavePool).supply(token, amount, address(this), 0);
   }
 
-  function withdrawToAdapter(address token, address aavePool, uint256 amount) external onlyAdapter returns (uint256) {
+  function withdrawTo(
+    address token,
+    address aavePool,
+    uint256 amount,
+    address recipient
+  ) external onlyAdapter returns (uint256) {
     require(token != address(0), "UserVault: zero token");
     require(aavePool != address(0), "UserVault: zero pool");
-    return IAavePool(aavePool).withdraw(token, amount, adapter);
+    require(recipient != address(0), "UserVault: zero recipient");
+    return IAavePool(aavePool).withdraw(token, amount, recipient);
   }
 }

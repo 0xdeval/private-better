@@ -2,14 +2,8 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
-const poseidonEntry = fileURLToPath(
-  new URL('./node_modules/@railgun-community/poseidon-hash-wasm/index.mjs', import.meta.url),
-);
-const curve25519Entry = fileURLToPath(
-  new URL(
-    './node_modules/@railgun-community/curve25519-scalarmult-wasm/pkg-esm/curve25519_scalarmult_wasm.js',
-    import.meta.url,
-  ),
+const libsodiumWrappersCjs = fileURLToPath(
+  new URL('./node_modules/libsodium-wrappers/dist/modules/libsodium-wrappers.js', import.meta.url),
 );
 
 export default defineConfig({
@@ -40,41 +34,25 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    conditions: ['browser', 'module', 'import', 'default'],
-    dedupe: [
-      'ethers',
-      '@railgun-community/engine',
-      '@railgun-community/shared-models',
-      '@railgun-community/circomlibjs',
-      '@railgun-community/ffjavascript',
-    ],
     alias: {
-      '@railgun-community/poseidon-hash-wasm': poseidonEntry,
-      '@railgun-community/curve25519-scalarmult-wasm': curve25519Entry,
+      'libsodium-wrappers': libsodiumWrappersCjs,
+    },
+  },
+  worker: {
+    format: 'es',
+    plugins: () => [],
+  },
+  build: {
+    commonjsOptions: {
+      transformMixedEsModules: true,
     },
   },
   optimizeDeps: {
-    include: [
-      'buffer',
-      'process',
-      'crypto-browserify',
-      'stream-browserify',
-      'browserify-zlib',
-      '@railgun-community/wallet',
-      '@railgun-community/engine',
-      '@railgun-community/circomlibjs',
-      '@railgun-community/circomlibjs/index.js',
-      '@railgun-community/ffjavascript',
-      '@railgun-community/ffjavascript/index.js',
-    ],
-    needsInterop: [
-      '@railgun-community/circomlibjs',
-      '@railgun-community/ffjavascript',
-    ],
-    exclude: [
-      '@railgun-community/poseidon-hash-wasm',
-      '@railgun-community/curve25519-scalarmult-wasm',
-    ],
+    include: ['bn.js', 'eventemitter3'],
+    needsInterop: ['bn.js', 'eventemitter3'],
+    esbuildOptions: {
+      target: 'ES2022',
+    },
   },
   server: {
     port: 3017,

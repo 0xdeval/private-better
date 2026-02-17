@@ -65,19 +65,17 @@ to_lower() {
   echo "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-load_dotenv "${ENV_FILE}"
-
-resolve_env() {
-  local target="$1"
-  shift
-  for key in "$@"; do
-    if [[ -n "${!key:-}" ]]; then
-      export "${target}=${!key}"
-      return 0
-    fi
-  done
-  return 1
+normalize_uint_output() {
+  local value="$1"
+  value="$(echo "${value}" | tr -d '[:space:]')"
+  value="${value%%\[*}"
+  if [[ "${value}" == 0x* || "${value}" == 0X* ]]; then
+    value="$(cast to-dec "${value}")"
+  fi
+  printf '%s' "${value}"
 }
+
+load_dotenv "${ENV_FILE}"
 
 if ! command -v cast >/dev/null 2>&1; then
   echo "Error: cast is not installed or not in PATH." >&2
@@ -88,12 +86,6 @@ if ! command -v bun >/dev/null 2>&1; then
   echo "Error: bun is not installed or not in PATH." >&2
   exit 1
 fi
-
-resolve_env RPC_URL RPC_URL AMOY_RPC_URL || true
-resolve_env PRIVATE_SUPPLY_ADAPTER PRIVATE_SUPPLY_ADAPTER AMOY_PRIVATE_SUPPLY_ADAPTER || true
-resolve_env SUPPLY_TOKEN SUPPLY_TOKEN USDC AMOY_USDC || true
-resolve_env AAVE_POOL AAVE_POOL AMOY_AAVE_POOL || true
-resolve_env VAULT_FACTORY VAULT_FACTORY AMOY_VAULT_FACTORY || true
 
 require_env RPC_URL
 require_env DEPLOYER_PRIVATE_KEY
@@ -114,57 +106,30 @@ for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY; do
   fi
 done
 
-SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}" # 1 USDC
+SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}" # 1 token with 6 decimals
 SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL:-zk-owner-supply-smoke}"
 SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-withdraw-secret-supply-smoke}"
-SMOKE_SET_CALLBACK_TO_DEPLOYER="${SMOKE_SET_CALLBACK_TO_DEPLOYER:-true}"
-SMOKE_RESTORE_CALLBACK="${SMOKE_RESTORE_CALLBACK:-true}"
+SMOKE_SET_EXECUTOR_TO_DEPLOYER="${SMOKE_SET_EXECUTOR_TO_DEPLOYER:-true}"
+SMOKE_RESTORE_EXECUTOR="${SMOKE_RESTORE_EXECUTOR:-true}"
 
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "${DEPLOYER_PRIVATE_KEY}")"
-ORIGINAL_CALLBACK="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "railgunCallbackSender()(address)" --rpc-url "${RPC_URL}")"
+ORIGINAL_EXECUTOR="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "privacyExecutor()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_TOKEN="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "supplyToken()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_POOL="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "aavePool()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_FACTORY="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "vaultFactory()(address)" --rpc-url "${RPC_URL}")"
-DEPLOYER_TOKEN_BALANCE_HEX="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${DEPLOYER_ADDRESS}" --rpc-url "${RPC_URL}")"
-DEPLOYER_TOKEN_BALANCE_HEX="$(echo "${DEPLOYER_TOKEN_BALANCE_HEX}" | tr -d '[:space:]')"
-if [[ -z "${DEPLOYER_TOKEN_BALANCE_HEX}" ]]; then
-  echo "Error: empty balance response from token contract." >&2
-  exit 1
-fi
-if [[ "${DEPLOYER_TOKEN_BALANCE_HEX}" == 0x* || "${DEPLOYER_TOKEN_BALANCE_HEX}" == 0X* ]]; then
-  DEPLOYER_TOKEN_BALANCE="$(cast to-dec "${DEPLOYER_TOKEN_BALANCE_HEX}")"
-else
-  DEPLOYER_TOKEN_BALANCE="${DEPLOYER_TOKEN_BALANCE_HEX}"
-fi
-DEPLOYER_TOKEN_BALANCE="${DEPLOYER_TOKEN_BALANCE%%\[*}"
-DEPLOYER_TOKEN_BALANCE="$(echo "${DEPLOYER_TOKEN_BALANCE}" | tr -d '[:space:]')"
-if ! [[ "${DEPLOYER_TOKEN_BALANCE}" =~ ^[0-9]+$ ]]; then
-  echo "Error: unexpected deployer balance format: ${DEPLOYER_TOKEN_BALANCE}" >&2
-  exit 1
-fi
-AAVE_RESERVE_ATOKEN=""
-if RESERVE_DATA="$(
-  cast call "${AAVE_POOL}" \
-    "getReserveData(address)((uint256,uint128,uint128,uint128,uint128,uint128,uint40,uint16,address,address,address,address,uint128,uint128,uint128))" \
-    "${SUPPLY_TOKEN}" --rpc-url "${RPC_URL}" 2>/dev/null
-)"; then
-  AAVE_RESERVE_ATOKEN="$(echo "${RESERVE_DATA}" | grep -Eo '0x[0-9a-fA-F]{40}' | sed -n '1p')"
-fi
+DEPLOYER_TOKEN_BALANCE_RAW="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${DEPLOYER_ADDRESS}" --rpc-url "${RPC_URL}")"
+DEPLOYER_TOKEN_BALANCE="$(normalize_uint_output "${DEPLOYER_TOKEN_BALANCE_RAW}")"
+
 
 echo "Starting PrivateSupplyAdapter smoke test"
-echo "RPC:            ${RPC_URL}"
-echo "Deployer:       ${DEPLOYER_ADDRESS}"
-echo "Adapter:        ${PRIVATE_SUPPLY_ADAPTER}"
-echo "Aave pool (env):${AAVE_POOL}"
-echo "Aave pool (adp):${ADAPTER_POOL}"
-echo "Token (env):    ${SUPPLY_TOKEN}"
-echo "Token (adp):    ${ADAPTER_TOKEN}"
-echo "Factory (env):  ${VAULT_FACTORY}"
-echo "Factory (adp):  ${ADAPTER_FACTORY}"
-echo "Token balance (deployer, raw): ${DEPLOYER_TOKEN_BALANCE}"
-if [[ -n "${AAVE_RESERVE_ATOKEN}" ]]; then
-  echo "Aave reserve aToken: ${AAVE_RESERVE_ATOKEN}"
-fi
+echo "RPC:                ${RPC_URL}"
+echo "Deployer:           ${DEPLOYER_ADDRESS}"
+echo "Adapter:            ${PRIVATE_SUPPLY_ADAPTER}"
+echo "Aave pool (env/adp):${AAVE_POOL} / ${ADAPTER_POOL}"
+echo "Token (env/adp):    ${SUPPLY_TOKEN} / ${ADAPTER_TOKEN}"
+echo "Factory (env/adp):  ${VAULT_FACTORY} / ${ADAPTER_FACTORY}"
+echo "Executor (orig):    ${ORIGINAL_EXECUTOR}"
+echo "Deployer token bal: ${DEPLOYER_TOKEN_BALANCE}"
 
 if [[ "$(to_lower "${ADAPTER_TOKEN}")" != "$(to_lower "${SUPPLY_TOKEN}")" ]]; then
   echo "Error: adapter supplyToken() does not match SUPPLY_TOKEN." >&2
@@ -178,23 +143,23 @@ if [[ "$(to_lower "${ADAPTER_FACTORY}")" != "$(to_lower "${VAULT_FACTORY}")" ]];
   echo "Error: adapter vaultFactory() does not match VAULT_FACTORY." >&2
   exit 1
 fi
-if [[ -n "${AAVE_RESERVE_ATOKEN}" && "${AAVE_RESERVE_ATOKEN}" == "0x0000000000000000000000000000000000000000" ]]; then
-  echo "Error: SUPPLY_TOKEN is not listed as an active reserve in this Aave pool." >&2
-  echo "Use the exact reserve token address from Aave Sepolia addresses." >&2
+if ! [[ "${DEPLOYER_TOKEN_BALANCE}" =~ ^[0-9]+$ ]]; then
+  echo "Error: could not parse deployer token balance: ${DEPLOYER_TOKEN_BALANCE_RAW}" >&2
   exit 1
 fi
 if (( DEPLOYER_TOKEN_BALANCE < SMOKE_STAKE_AMOUNT )); then
   echo "Error: deployer token balance is lower than SMOKE_STAKE_AMOUNT." >&2
   echo "Required (raw): ${SMOKE_STAKE_AMOUNT}" >&2
   echo "Current  (raw): ${DEPLOYER_TOKEN_BALANCE}" >&2
-  echo "Top up SUPPLY_TOKEN for ${DEPLOYER_ADDRESS} or lower SMOKE_STAKE_AMOUNT." >&2
+  echo "Top up SUPPLY_TOKEN for ${DEPLOYER_ADDRESS} or run with a lower amount." >&2
+  echo "Example: SMOKE_STAKE_AMOUNT=1000 bash scripts/smoke-test-supply-adapter.sh" >&2
   exit 1
 fi
 
-if is_true "${SMOKE_SET_CALLBACK_TO_DEPLOYER}"; then
-  echo "Step 1/6: Setting callback sender to deployer..."
+if is_true "${SMOKE_SET_EXECUTOR_TO_DEPLOYER}"; then
+  echo "Step 1/6: Setting privacy executor to deployer..."
   cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setRailgunCallbackSender(address)" "${DEPLOYER_ADDRESS}" \
+    "setPrivacyExecutor(address)" "${DEPLOYER_ADDRESS}" \
     --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 fi
 
@@ -207,11 +172,12 @@ echo "Step 3/6: Building supply request..."
 REQUEST_DATA="$(
   SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
   bun -e '
-    import { AbiCoder, keccak256, toUtf8Bytes } from "ethers";
+    import { ethers } from "ethers";
+    const { keccak256, toUtf8Bytes, defaultAbiCoder } = ethers.utils;
     const zkOwnerHash = keccak256(toUtf8Bytes(process.env.SMOKE_ZK_OWNER_LABEL ?? "zk-owner-supply-smoke"));
     const withdrawSecret = keccak256(toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-supply-smoke"));
     const withdrawAuthHash = keccak256(withdrawSecret);
-    const coder = AbiCoder.defaultAbiCoder();
+    const coder = defaultAbiCoder;
     console.log(coder.encode(["tuple(bytes32,bytes32)"], [[zkOwnerHash, withdrawAuthHash]]));
   '
 )"
@@ -219,17 +185,10 @@ REQUEST_DATA="$(
 NEXT_POSITION_ID="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "nextPositionId()(uint256)" --rpc-url "${RPC_URL}")"
 EXPECTED_POSITION_ID=$((NEXT_POSITION_ID + 1))
 
-echo "Step 4/6: Calling onRailgunUnshield..."
-STEP4_OUTPUT="$(cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-  "onRailgunUnshield(address,uint256,bytes)" "${SUPPLY_TOKEN}" "${SMOKE_STAKE_AMOUNT}" "${REQUEST_DATA}" \
-  --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" 2>&1)" || {
-  echo "${STEP4_OUTPUT}" >&2
-  if echo "${STEP4_OUTPUT}" | grep -qE 'execution reverted: 51|Error\("51"\)'; then
-    echo "Hint: Aave error 51 = SUPPLY_CAP_EXCEEDED for this reserve on the selected pool." >&2
-    echo "Try a different reserve asset with headroom, lower utilization chain, or switch back to mock pool for smoke tests." >&2
-  fi
-  exit 1
-}
+echo "Step 4/6: Calling onPrivateDeposit..."
+cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+  "onPrivateDeposit(address,uint256,bytes)" "${SUPPLY_TOKEN}" "${SMOKE_STAKE_AMOUNT}" "${REQUEST_DATA}" \
+  --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 
 echo "Step 5/6: Reading position and vault..."
 POSITION="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
@@ -238,7 +197,7 @@ POSITION="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
 
 VAULT_ADDRESS="$(cast call "${VAULT_FACTORY}" \
   "vaultOfZkOwner(bytes32)(address)" \
-  "$(SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" bun -e 'import { keccak256, toUtf8Bytes } from "ethers"; console.log(keccak256(toUtf8Bytes(process.env.SMOKE_ZK_OWNER_LABEL ?? "zk-owner-supply-smoke")));')" \
+  "$(SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL}" bun -e 'import { ethers } from "ethers"; console.log(ethers.utils.keccak256(ethers.utils.toUtf8Bytes(process.env.SMOKE_ZK_OWNER_LABEL ?? "zk-owner-supply-smoke")));')" \
   --rpc-url "${RPC_URL}")"
 
 AAVE_SUPPLIED=""
@@ -256,10 +215,10 @@ echo "- position tuple: ${POSITION}"
 echo "- vault: ${VAULT_ADDRESS}"
 echo "- suppliedBalance(vault, token): ${AAVE_SUPPLIED}"
 
-if is_true "${SMOKE_RESTORE_CALLBACK}"; then
-  echo "Restoring callback sender..."
+if is_true "${SMOKE_RESTORE_EXECUTOR}"; then
+  echo "Restoring privacy executor..."
   cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setRailgunCallbackSender(address)" "${ORIGINAL_CALLBACK}" \
+    "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
     --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 fi
 

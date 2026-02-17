@@ -45,25 +45,13 @@ load_dotenv() {
 
 load_dotenv "${ENV_FILE}"
 
-resolve_env() {
-  local target="$1"
-  shift
-  for key in "$@"; do
-    if [[ -n "${!key:-}" ]]; then
-      export "${target}=${!key}"
-      return 0
-    fi
-  done
-  return 1
-}
-
 if ! command -v forge >/dev/null 2>&1; then
   echo "Error: forge is not installed or not in PATH." >&2
   exit 1
 fi
 
-if ! resolve_env RPC_URL RPC_URL AMOY_RPC_URL; then
-  echo "Error: RPC_URL is missing in .env (legacy fallback: AMOY_RPC_URL)." >&2
+if [[ -z "${RPC_URL:-}" ]]; then
+  echo "Error: RPC_URL is missing in .env." >&2
   exit 1
 fi
 
@@ -77,32 +65,31 @@ if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   exit 1
 fi
 
-echo "Deploying MockRailgun..."
+echo "Deploying MockPrivacyExecutor..."
 echo "RPC: ${RPC_URL}"
 
-DEPLOY_OUTPUT="$(forge create contracts/mocks/MockRailgun.sol:MockRailgun \
+DEPLOY_OUTPUT="$(forge create contracts/mocks/MockRailgun.sol:MockPrivacyExecutor \
   --rpc-url "${RPC_URL}" \
   --private-key "${DEPLOYER_PRIVATE_KEY}" \
   --broadcast 2>&1)"
 
 echo "${DEPLOY_OUTPUT}"
 
-MOCK_RAILGUN_ADDRESS="$(echo "${DEPLOY_OUTPUT}" | sed -n 's/.*Deployed to: \(0x[0-9a-fA-F]\{40\}\).*/\1/p' | tail -n1)"
+MOCK_PRIVACY_EXECUTOR="$(echo "${DEPLOY_OUTPUT}" | sed -n 's/.*Deployed to: \(0x[0-9a-fA-F]\{40\}\).*/\1/p' | tail -n1)"
 
-if [[ -z "${MOCK_RAILGUN_ADDRESS}" ]]; then
+if [[ -z "${MOCK_PRIVACY_EXECUTOR}" ]]; then
   if echo "${DEPLOY_OUTPUT}" | grep -qi "insufficient funds"; then
     echo "Error: deployment failed due to insufficient gas funds in deployer wallet." >&2
     echo "Top up native gas token on the target chain and run the script again." >&2
   else
     echo "Error: could not parse deployed address from forge output." >&2
     echo "If needed, run manually:" >&2
-    echo "forge create contracts/mocks/MockRailgun.sol:MockRailgun --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast" >&2
+    echo "forge create contracts/mocks/MockRailgun.sol:MockPrivacyExecutor --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast" >&2
   fi
   exit 1
 fi
 
 echo
-echo "MockRailgun deployed at: ${MOCK_RAILGUN_ADDRESS}"
+echo "MockPrivacyExecutor deployed at: ${MOCK_PRIVACY_EXECUTOR}"
 echo "Add/update this in .env:"
-echo "MOCK_RAILGUN=${MOCK_RAILGUN_ADDRESS}"
-echo "(legacy fallback still accepted: AMOY_MOCK_RAILGUN=${MOCK_RAILGUN_ADDRESS})"
+echo "MOCK_PRIVACY_EXECUTOR=${MOCK_PRIVACY_EXECUTOR}"

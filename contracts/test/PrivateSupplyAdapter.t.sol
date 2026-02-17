@@ -4,24 +4,26 @@ pragma solidity ^0.8.20;
 import {PrivateSupplyAdapter} from "../PrivateSupplyAdapter.sol";
 import {VaultFactory} from "../VaultFactory.sol";
 import {MockAavePool} from "../mocks/MockAavePool.sol";
-import {MockRailgun} from "../mocks/MockRailgun.sol";
+import {MockPrivacyExecutor} from "../mocks/MockRailgun.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
 
-contract NonCallbackWithdrawCaller {
+contract NonExecutorWithdrawCaller {
   function callWithdraw(
     address adapter,
     uint256 positionId,
     uint256 amount,
     bytes32 withdrawAuthSecret,
-    bytes32 nextWithdrawAuthHash
+    bytes32 nextWithdrawAuthHash,
+    address recipient
   ) external returns (bool ok) {
     (ok, ) = adapter.call(
       abi.encodeWithSignature(
-        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
+        "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)",
         positionId,
         amount,
         withdrawAuthSecret,
-        nextWithdrawAuthHash
+        nextWithdrawAuthHash,
+        recipient
       )
     );
   }
@@ -30,10 +32,10 @@ contract NonCallbackWithdrawCaller {
 contract PrivateSupplyAdapterTest {
   MockUSDC internal usdc;
   MockAavePool internal aavePool;
-  MockRailgun internal railgun;
+  MockPrivacyExecutor internal executor;
   VaultFactory internal factory;
   PrivateSupplyAdapter internal adapter;
-  NonCallbackWithdrawCaller internal nonCallbackCaller;
+  NonExecutorWithdrawCaller internal nonExecutorCaller;
 
   uint256 internal constant USDC_1 = 1_000_000;
   uint256 internal constant STAKE = 100 * USDC_1;
@@ -41,32 +43,26 @@ contract PrivateSupplyAdapterTest {
   function setUp() public {
     usdc = new MockUSDC();
     aavePool = new MockAavePool();
-    railgun = new MockRailgun();
+    executor = new MockPrivacyExecutor();
     factory = new VaultFactory();
-    adapter = new PrivateSupplyAdapter(
-      address(railgun),
-      address(railgun),
-      address(aavePool),
-      address(usdc),
-      address(factory)
-    );
-    nonCallbackCaller = new NonCallbackWithdrawCaller();
+    adapter = new PrivateSupplyAdapter(address(executor), address(aavePool), address(usdc), address(factory));
+    nonExecutorCaller = new NonExecutorWithdrawCaller();
 
     factory.setAdapter(address(adapter));
-    railgun.setAdapter(address(adapter));
+    executor.setAdapter(address(adapter));
 
     usdc.mint(address(this), 2_000 * USDC_1);
-    usdc.approve(address(railgun), type(uint256).max);
-    railgun.depositToken(address(usdc), 600 * USDC_1);
+    usdc.approve(address(executor), type(uint256).max);
+    executor.depositToken(address(usdc), 600 * USDC_1);
   }
 
-  function testUnshieldSupplyFlowStoresWithdrawAuthAndOwnerIndex() public {
+  function testPrivateDepositFlowStoresWithdrawAuthAndOwnerIndex() public {
     bytes32 zkOwnerHash = keccak256("zk-owner-1");
     bytes32 withdrawAuthSecret = keccak256("withdraw-secret-1");
     bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
     bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
 
-    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
+    uint256 positionId = executor.executePrivateDeposit(address(usdc), STAKE, data);
     require(positionId == 1, "expected position id 1");
 
     (bytes32 ownerHash, address vault, address token, uint256 amount, bytes32 storedWithdrawAuthHash) = adapter
@@ -85,26 +81,33 @@ contract PrivateSupplyAdapterTest {
     require(supplied == STAKE, "aave supplied balance mismatch");
   }
 
-  function testOnlyRailgunCanCallUnshieldCallback() public {
+  function testOnlyExecutorCanCallPrivateDeposit() public {
     bytes32 zkOwnerHash = keccak256("zk-owner-2");
     bytes32 withdrawAuthHash = keccak256("withdraw-auth-2");
     bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
     (bool ok, ) = address(adapter).call(
-      abi.encodeWithSelector(adapter.onRailgunUnshield.selector, address(usdc), STAKE, data)
+      abi.encodeWithSelector(adapter.onPrivateDeposit.selector, address(usdc), STAKE, data)
     );
-    require(!ok, "expected callback access control revert");
+    require(!ok, "expected executor access control revert");
   }
 
-  function testWithdrawAndShieldFullFlowWithCorrectSecret() public {
-    adapter.setRailgunCallbackSender(address(this));
-
+  function testWithdrawToRecipientFullFlowWithCorrectSecret() public {
     bytes32 zkOwnerHash = keccak256("zk-owner-3");
     bytes32 withdrawAuthSecret = keccak256("withdraw-secret-3");
     bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
     bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
 
-    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
-    uint256 withdrawn = adapter.withdrawAndShield(positionId, type(uint256).max, withdrawAuthSecret, bytes32(0));
+    uint256 positionId = executor.executePrivateDeposit(address(usdc), STAKE, data);
+    address recipient = address(0xBEEF);
+    uint256 beforeRecipient = usdc.balanceOf(recipient);
+
+    uint256 withdrawn = executor.executePrivateWithdraw(
+      positionId,
+      type(uint256).max,
+      withdrawAuthSecret,
+      bytes32(0),
+      recipient
+    );
     require(withdrawn == STAKE, "withdrawn amount mismatch");
 
     (bytes32 ownerHash, address vault, address token, uint256 amount, bytes32 nextWithdrawHash) = adapter.positions(
@@ -119,83 +122,93 @@ contract PrivateSupplyAdapterTest {
     uint256 supplied = aavePool.suppliedBalance(vault, address(usdc));
     require(supplied == 0, "aave supplied should be zero");
 
-    uint256 railgunBalance = usdc.balanceOf(address(railgun));
-    require(railgunBalance == 600 * USDC_1, "railgun balance should be restored");
+    uint256 afterRecipient = usdc.balanceOf(recipient);
+    require(afterRecipient - beforeRecipient == STAKE, "recipient should receive withdrawn funds");
   }
 
   function testWithdrawRevertsForWrongSecret() public {
-    adapter.setRailgunCallbackSender(address(this));
-
     bytes32 zkOwnerHash = keccak256("zk-owner-4");
     bytes32 withdrawAuthSecret = keccak256("withdraw-secret-4");
     bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
     bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
-    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
+    uint256 positionId = executor.executePrivateDeposit(address(usdc), STAKE, data);
 
     bytes32 wrongSecret = keccak256("wrong-secret-4");
-    (bool ok, ) = address(adapter).call(
+    (bool ok, ) = address(executor).call(
       abi.encodeWithSignature(
-        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
+        "executePrivateWithdraw(uint256,uint256,bytes32,bytes32,address)",
         positionId,
         STAKE,
         wrongSecret,
-        bytes32(0)
+        bytes32(0),
+        address(this)
       )
     );
     require(!ok, "withdraw with wrong secret should fail");
   }
 
-  function testOnlyCallbackCanWithdrawAndShield() public {
+  function testOnlyExecutorCanWithdrawToRecipient() public {
     bytes32 zkOwnerHash = keccak256("zk-owner-5");
     bytes32 withdrawAuthSecret = keccak256("withdraw-secret-5");
     bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
     bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
-    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
+    uint256 positionId = executor.executePrivateDeposit(address(usdc), STAKE, data);
 
-    bool ok = nonCallbackCaller.callWithdraw(address(adapter), positionId, STAKE, withdrawAuthSecret, bytes32(0));
-    require(!ok, "non-callback withdraw should fail");
+    bool ok = nonExecutorCaller.callWithdraw(
+      address(adapter),
+      positionId,
+      STAKE,
+      withdrawAuthSecret,
+      bytes32(0),
+      address(this)
+    );
+    require(!ok, "non-executor withdraw should fail");
   }
 
   function testPartialWithdrawRotatesSecret() public {
-    adapter.setRailgunCallbackSender(address(this));
-
     bytes32 zkOwnerHash = keccak256("zk-owner-6");
     bytes32 withdrawAuthSecret = keccak256("withdraw-secret-6");
     bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
     bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
-    uint256 positionId = railgun.unshieldToAdapter(address(usdc), STAKE, data);
+    uint256 positionId = executor.executePrivateDeposit(address(usdc), STAKE, data);
 
     uint256 partialAmount = 40 * USDC_1;
     bytes32 nextSecret = keccak256("withdraw-secret-6-next");
     bytes32 nextHash = keccak256(abi.encodePacked(nextSecret));
 
-    uint256 withdrawn = adapter.withdrawAndShield(positionId, partialAmount, withdrawAuthSecret, nextHash);
+    uint256 withdrawn = executor.executePrivateWithdraw(
+      positionId,
+      partialAmount,
+      withdrawAuthSecret,
+      nextHash,
+      address(this)
+    );
     require(withdrawn == partialAmount, "partial withdrawn mismatch");
 
     (, , , uint256 remainingAmount, bytes32 storedNextHash) = adapter.positions(positionId);
     require(remainingAmount == STAKE - partialAmount, "remaining amount mismatch");
     require(storedNextHash == nextHash, "next hash not stored");
 
-    // Old secret must fail after rotation.
-    (bool okOld, ) = address(adapter).call(
+    (bool okOld, ) = address(executor).call(
       abi.encodeWithSignature(
-        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
+        "executePrivateWithdraw(uint256,uint256,bytes32,bytes32,address)",
         positionId,
         1,
         withdrawAuthSecret,
-        keccak256("another-next-hash")
+        keccak256("another-next-hash"),
+        address(this)
       )
     );
     require(!okOld, "old secret should fail after rotation");
 
-    // New secret should pass.
-    (bool okNew, ) = address(adapter).call(
+    (bool okNew, ) = address(executor).call(
       abi.encodeWithSignature(
-        "withdrawAndShield(uint256,uint256,bytes32,bytes32)",
+        "executePrivateWithdraw(uint256,uint256,bytes32,bytes32,address)",
         positionId,
         type(uint256).max,
         nextSecret,
-        bytes32(0)
+        bytes32(0),
+        address(this)
       )
     );
     require(okNew, "new secret should pass");

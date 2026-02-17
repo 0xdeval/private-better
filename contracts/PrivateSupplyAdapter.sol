@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import {IAavePool} from "./interfaces/IAavePool.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
-import {IRailgunShield} from "./interfaces/IRailgunShield.sol";
 import {Ownable} from "./utils/Ownable.sol";
 import {UserVault} from "./UserVault.sol";
 import {VaultFactory} from "./VaultFactory.sol";
@@ -22,20 +21,18 @@ contract PrivateSupplyAdapter is Ownable {
     bytes32 withdrawAuthHash;
   }
 
-  address public railgunCallbackSender;
+  address public privacyExecutor;
   address public supplyToken;
   IAavePool public aavePool;
-  IRailgunShield public railgunShield;
   VaultFactory public vaultFactory;
   uint256 public nextPositionId;
 
   mapping(uint256 => SupplyPosition) public positions;
   mapping(bytes32 => uint256[]) private ownerPositionIds;
 
-  event RailgunCallbackSenderUpdated(address indexed sender);
+  event PrivacyExecutorUpdated(address indexed executor);
   event SupplyTokenUpdated(address indexed token);
   event AavePoolUpdated(address indexed pool);
-  event RailgunShieldUpdated(address indexed railgunShield);
   event VaultFactoryUpdated(address indexed factory);
   event PrivateSupplyDeposited(
     uint256 indexed positionId,
@@ -51,39 +48,36 @@ contract PrivateSupplyAdapter is Ownable {
     address indexed vault,
     address token,
     uint256 amount,
-    bytes32 shieldToZkAddressHash,
+    address recipient,
     bytes32 nextWithdrawAuthHash
   );
 
-  modifier onlyRailgunCallback() {
-    require(msg.sender == railgunCallbackSender, "SupplyAdapter: only railgun callback");
+  modifier onlyPrivacyExecutor() {
+    require(msg.sender == privacyExecutor, "SupplyAdapter: only privacy executor");
     _;
   }
 
   constructor(
-    address railgunCallbackSender_,
-    address railgunShield_,
+    address privacyExecutor_,
     address aavePool_,
     address supplyToken_,
     address vaultFactory_
   ) {
-    require(railgunCallbackSender_ != address(0), "SupplyAdapter: zero callback");
-    require(railgunShield_ != address(0), "SupplyAdapter: zero shield");
+    require(privacyExecutor_ != address(0), "SupplyAdapter: zero executor");
     require(aavePool_ != address(0), "SupplyAdapter: zero pool");
     require(supplyToken_ != address(0), "SupplyAdapter: zero token");
     require(vaultFactory_ != address(0), "SupplyAdapter: zero factory");
 
-    railgunCallbackSender = railgunCallbackSender_;
-    railgunShield = IRailgunShield(railgunShield_);
+    privacyExecutor = privacyExecutor_;
     aavePool = IAavePool(aavePool_);
     supplyToken = supplyToken_;
     vaultFactory = VaultFactory(vaultFactory_);
   }
 
-  function setRailgunCallbackSender(address sender) external onlyOwner {
-    require(sender != address(0), "SupplyAdapter: zero callback");
-    railgunCallbackSender = sender;
-    emit RailgunCallbackSenderUpdated(sender);
+  function setPrivacyExecutor(address executor) external onlyOwner {
+    require(executor != address(0), "SupplyAdapter: zero executor");
+    privacyExecutor = executor;
+    emit PrivacyExecutorUpdated(executor);
   }
 
   function setSupplyToken(address token) external onlyOwner {
@@ -98,23 +92,17 @@ contract PrivateSupplyAdapter is Ownable {
     emit AavePoolUpdated(pool);
   }
 
-  function setRailgunShield(address shield) external onlyOwner {
-    require(shield != address(0), "SupplyAdapter: zero shield");
-    railgunShield = IRailgunShield(shield);
-    emit RailgunShieldUpdated(shield);
-  }
-
   function setVaultFactory(address factory) external onlyOwner {
     require(factory != address(0), "SupplyAdapter: zero factory");
     vaultFactory = VaultFactory(factory);
     emit VaultFactoryUpdated(factory);
   }
 
-  function onRailgunUnshield(
+  function onPrivateDeposit(
     address token,
     uint256 amount,
     bytes calldata data
-  ) external onlyRailgunCallback returns (uint256 positionId) {
+  ) external onlyPrivacyExecutor returns (uint256 positionId) {
     require(token == supplyToken, "SupplyAdapter: unsupported token");
     require(amount > 0, "SupplyAdapter: zero amount");
 
@@ -139,13 +127,15 @@ contract PrivateSupplyAdapter is Ownable {
     emit PrivateSupplyDeposited(positionId, request.zkOwnerHash, vault, token, amount, request.withdrawAuthHash);
   }
 
-  function withdrawAndShield(
+  function withdrawToRecipient(
     uint256 positionId,
     uint256 amount,
     bytes32 withdrawAuthSecret,
-    bytes32 nextWithdrawAuthHash
-  ) external onlyRailgunCallback returns (uint256 withdrawnAmount) {
+    bytes32 nextWithdrawAuthHash,
+    address recipient
+  ) external onlyPrivacyExecutor returns (uint256 withdrawnAmount) {
     require(withdrawAuthSecret != bytes32(0), "SupplyAdapter: zero withdraw secret");
+    require(recipient != address(0), "SupplyAdapter: zero recipient");
 
     SupplyPosition storage position = positions[positionId];
     require(position.vault != address(0), "SupplyAdapter: invalid position");
@@ -161,10 +151,9 @@ contract PrivateSupplyAdapter is Ownable {
     require(amount > 0, "SupplyAdapter: zero amount");
     require(amount <= position.amount, "SupplyAdapter: amount exceeds position");
 
-    withdrawnAmount = UserVault(position.vault).withdrawToAdapter(position.token, address(aavePool), amount);
+    withdrawnAmount = UserVault(position.vault).withdrawTo(position.token, address(aavePool), amount, recipient);
     require(withdrawnAmount > 0, "SupplyAdapter: zero withdrawn");
 
-    // Defensive: Aave should not withdraw more than requested.
     require(withdrawnAmount <= amount, "SupplyAdapter: invalid withdrawn amount");
     position.amount -= withdrawnAmount;
 
@@ -173,20 +162,13 @@ contract PrivateSupplyAdapter is Ownable {
     }
     position.withdrawAuthHash = nextWithdrawAuthHash;
 
-    require(IERC20(position.token).approve(address(railgunShield), 0), "SupplyAdapter: reset approve failed");
-    require(
-      IERC20(position.token).approve(address(railgunShield), withdrawnAmount),
-      "SupplyAdapter: approve failed"
-    );
-    railgunShield.shield(position.token, withdrawnAmount, position.zkOwnerHash);
-
     emit PrivateSupplyWithdrawn(
       positionId,
       position.zkOwnerHash,
       position.vault,
       position.token,
       withdrawnAmount,
-      position.zkOwnerHash,
+      recipient,
       nextWithdrawAuthHash
     );
   }

@@ -3,16 +3,15 @@ type EncryptedPayload = {
   ciphertext: string;
 };
 
-export type RailgunLocalSession = {
-  walletID: string;
-  railgunAddress: string;
+export type PrivacyLocalSession = {
+  privateAddress: string;
   mnemonic: string;
   positionSecrets: Record<string, string>;
   updatedAt: number;
 };
 
 const SESSION_VERSION = 1;
-const STORAGE_PREFIX = 'pb.railgun.session';
+const STORAGE_PREFIX = 'pb.privacy.session';
 
 type WrappedSession = {
   version: number;
@@ -88,11 +87,11 @@ const decryptPayload = async (sessionKeyHex: string, payload: EncryptedPayload):
 const storageKey = (chainId: bigint, eoaAddress: string): string =>
   `${STORAGE_PREFIX}:v${SESSION_VERSION}:${chainId.toString()}:${eoaAddress.toLowerCase()}`;
 
-export const loadRailgunSession = async (
+export const loadPrivacySession = async (
   chainId: bigint,
   eoaAddress: string,
   sessionKeyHex: string,
-): Promise<RailgunLocalSession | null> => {
+): Promise<PrivacyLocalSession | null> => {
   const raw = localStorage.getItem(storageKey(chainId, eoaAddress));
   if (!raw) return null;
 
@@ -105,8 +104,8 @@ export const loadRailgunSession = async (
   }
 
   const plain = await decryptPayload(sessionKeyHex, wrapped.payload);
-  const parsed = JSON.parse(plain) as RailgunLocalSession;
-  if (!parsed.walletID || !parsed.railgunAddress || !parsed.mnemonic) {
+  const parsed = JSON.parse(plain) as PrivacyLocalSession;
+  if (!parsed.privateAddress || !parsed.mnemonic) {
     return null;
   }
   parsed.positionSecrets ??= {};
@@ -114,11 +113,11 @@ export const loadRailgunSession = async (
   return parsed;
 };
 
-export const saveRailgunSession = async (
+export const savePrivacySession = async (
   chainId: bigint,
   eoaAddress: string,
   sessionKeyHex: string,
-  session: RailgunLocalSession,
+  session: PrivacyLocalSession,
 ): Promise<void> => {
   const payloadText = JSON.stringify({
     ...session,
@@ -133,6 +132,31 @@ export const saveRailgunSession = async (
   localStorage.setItem(storageKey(chainId, eoaAddress), JSON.stringify(wrapped));
 };
 
-export const clearRailgunSession = (chainId: bigint, eoaAddress: string): void => {
+export const clearPrivacySession = (chainId: bigint, eoaAddress: string): void => {
   localStorage.removeItem(storageKey(chainId, eoaAddress));
+};
+
+export const clearLegacyRailgunStorage = async (): Promise<void> => {
+  for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    if (key.startsWith('pb.railgun.session') || key.startsWith('railgun-artifact')) {
+      localStorage.removeItem(key);
+    }
+  }
+
+  if (typeof indexedDB === 'undefined') return;
+
+  const dbNames = ['railgun_engine_db_arbitrum_v2', 'railgun_artifacts_db:arbitrum_v2'];
+  await Promise.all(
+    dbNames.map(
+      (dbName) =>
+        new Promise<void>((resolve) => {
+          const req = indexedDB.deleteDatabase(dbName);
+          req.onsuccess = () => resolve();
+          req.onerror = () => resolve();
+          req.onblocked = () => resolve();
+        }),
+    ),
+  );
 };
