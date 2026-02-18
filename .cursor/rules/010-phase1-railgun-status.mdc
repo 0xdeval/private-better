@@ -7,86 +7,45 @@ globs: *
 > - `.cursor/rules/000-general-project-context.mdc`
 > - `.cursor/rules/050-hinkal-webcli-handoff.mdc`
 
-# PHASE 1 STATUS (RAILGUN INTEGRATION)
+# PHASE 1 STATUS (HISTORICAL)
 
-This repo has completed a working Phase 1 MVP flow on Polygon Amoy:
+Phase 1 covered an earlier Railgun MVP and is no longer the active product implementation.
 
-1. Connect injected wallet (MetaMask/Coinbase compatible detection).
-2. Initialize Railgun engine in browser.
-3. Generate Railgun wallet (`0zk...`) from mnemonic.
-4. Approve USDC to Railgun proxy.
-5. Shield USDC from public wallet to private Railgun wallet.
-
-## CURRENT APP ENTRYPOINTS
-
-- `index.html` loads `src/webcli/entry.ts`.
-- `src/webcli/entry.ts` loads polyfills and web CLI app.
-- `src/webcli/app.ts` implements terminal commands and wallet interactions.
-- `src/railgun/railgunManager.ts` wraps Railgun SDK init + shield logic.
-- `src/railgun/railgunStorage.ts` implements browser DB + artifact storage.
-- `src/railgun/railgunConstants.ts` defines network/rpc/token config.
-
-## COMMANDS (WEB CLI)
+## CURRENT COMMAND SURFACE (ACTIVE IMPLEMENTATION)
 
 - `help`
-- `show-config`
-- `set-rpc <rpc-url>`
-- `set-usdc <token-address>`
-- `connect`
-- `init-railgun`
-- `generate-wallet [mnemonic]`
-- `approve-usdc <amount>`
-- `shield-usdc <0zkAddress> <amount>`
+- `clear`
+- `login`
+- `import <mnemonic>`
+- `approve <amount>`
+- `shield <amount>`
+- `unshield <amount> [recipient]`
+- `private-balance`
+- `private-supply <amount>`
+- `supply-positions`
+- `private-withdraw <positionId> <amount|max>`
 
-`generate-wallet` uses `VITE_RAILGUN_TEST_MNEMONIC` automatically if no mnemonic argument is passed.
+## CURRENT ENV CONVENTION
 
-## ENV VARS
+WebCLI keys:
 
-Expected in `.env` for local MVP testing:
+- `VITE_PRIVATE_EMPORIUM`
+- `VITE_PRIVATE_RPC`
+- `VITE_PRIVATE_NETWORK`
+- `VITE_SUPPLY_TOKEN`
+- `VITE_PRIVATE_SUPPLY_ADAPTER`
+- optional: `VITE_PRIVATE_FEE_BUFFER_BPS`, `VITE_PRIVATE_DEBUG`
 
-- `VITE_RAILGUN_RPC`
-- `VITE_USDC_ADDRESS` (legacy fallback: `VITE_USDC_AMOY`)
-- `VITE_RAILGUN_TEST_MNEMONIC` (test only; never for real funds)
+Scripts/contracts keys:
 
-## CRITICAL IMPLEMENTATION NOTES
+- `PRIVATE_EMPORIUM`
+- `RPC_URL`
+- `DEPLOYER_PRIVATE_KEY`
+- `AAVE_POOL`
+- `SUPPLY_TOKEN`
+- `VAULT_FACTORY`
+- `PRIVATE_SUPPLY_ADAPTER`
 
-1. Vite + polyfills are required for Railgun browser compatibility.
-2. Railgun dependencies include CJS + WASM; dep optimization must stay configured.
-3. `@railgun-community/shared-models@7.6.1` has Polygon Amoy V3 addresses as empty strings.
-4. Runtime workaround in `railgunManager.ts` disables V3 on Amoy if V3 addresses are missing.
-5. Some RPC providers fail Railgun init due batch request limits.
+## HISTORICAL NOTE
 
-## KNOWN WORKING/FAILING CONDITIONS
-
-- `https://polygon-amoy.drpc.org` free tier can fail (`Batch of more than 3 requests are not allowed`).
-- Use an RPC endpoint that supports JSON-RPC batching for Railgun init.
-- If wallet connect fails with provider injection errors, disable conflicting wallet extensions and retry.
-
-## FRONTEND/BUILD SETTINGS
-
-- Package manager: Bun.
-- Dev server: Vite on port `3017`.
-- `package.json` uses:
-  - `dev:web`: `bunx --bun vite --force --port 3017 --strictPort`
-  - `build:web`: `bunx --bun vite build`
-  - `typecheck`: `tsc --noEmit`
-
-## PHASE 2 HANDOFF (UPDATED)
-
-Implement contracts with mock-first private supply approach:
-
-1. `MockAavePool` and minimal Railgun callback/shield interfaces.
-2. `PrivateSupplyAdapter.onRailgunUnshield`:
-   - Called by Railgun unshield callback.
-   - Decode supply payload (`zkOwnerHash`).
-   - Route funds to per-user vault and call Aave supply.
-3. `VaultFactory` + `UserVault`:
-   - One vault per `zkOwnerHash` for user isolation.
-4. Write tests for happy path + callback access restriction.
-
-## DO NOT REGRESS
-
-1. Do not remove Vite dep optimization/polyfill setup for Railgun deps.
-2. Do not assume user public EOA and Railgun mnemonic are the same identity.
-3. Do not hard-fail on Polygon Amoy V3 empty address config.
-4. Keep MVP flow simple and unblock-first.
+Any references to legacy Railgun-specific env names or command names should be treated as archived context only.

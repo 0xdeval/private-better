@@ -7,73 +7,31 @@ globs: *
 > - `.cursor/rules/000-general-project-context.mdc`
 > - `.cursor/rules/050-hinkal-webcli-handoff.mdc`
 
-# PHASE 4 PLAN (RAILGUN + WEBCLI WIRING)
+# PHASE 4 PLAN (HISTORICAL)
 
-Objective:
+This phase originally outlined WebCLI orchestration for private supply/withdraw.
+The current implementation is Hinkal-first and already exposes the canonical command surface.
 
-- Execute end-to-end private user flow from WebCLI:
-  1. private balance in Railgun
-  2. unshield -> `PrivateSupplyAdapter` call
-  3. supply into Aave
-  4. withdraw + shield back to private destination
+## Current Canonical Commands
 
-## Scope
+- `help`
+- `clear`
+- `login`
+- `import <mnemonic>`
+- `approve <amount>`
+- `shield <amount>`
+- `unshield <amount> [recipient]`
+- `private-balance`
+- `private-supply <amount>`
+- `supply-positions`
+- `private-withdraw <positionId> <amount|max>`
 
-In scope:
+## Current Acceptance Expectations
 
-1. Frontend/WebCLI command wiring.
-2. Railgun tx payload construction for unshield + external call.
-3. Adapter payload encoding (`zkOwnerHash`, position/withdraw params).
-4. Relayer/self-broadcast mode for hackathon MVP.
-
-Out of scope (for this phase):
-
-1. Advanced account abstraction.
-2. Production-grade risk controls and multi-sig admin management.
-
-## Implementation Steps
-
-1. Network config hardening
-- Make Railgun/WebCLI network fully env-driven for Arbitrum Sepolia/Arbitrum One.
-- Keep explicit validation for required chain IDs and contract addresses.
-
-2. CLI command surface
-- Add commands:
-  - `railgun-login`
-  - `railgun-import <mnemonic>`
-  - `railgun-logout`
-  - `railgun-forget`
-  - `private-supply <amount>`
-  - `private-withdraw <positionId> <amount|max>`
-  - `show-positions` (basic adapter read helper)
-
-3. Adapter calldata encoding
-- Supply calldata:
-  - encode `SupplyRequest { zkOwnerHash, withdrawAuthHash }`.
-- Withdraw calldata:
-  - call `withdrawAndShield(positionId, amount, withdrawAuthSecret, nextWithdrawAuthHash)` through Railgun callback path.
-
-4. Railgun tx integration
-- Build transaction that unshields token and executes adapter callback path.
-- Use current relayer/self-send mode that works with project constraints.
-
-5. Verification path
-- Validate from CLI:
-  - tx hash output,
-  - adapter position state,
-  - vault/aToken observable state,
-  - post-withdraw shield target behavior.
-
-## Acceptance Criteria
-
-1. From WebCLI, user can trigger private supply via Railgun path (no manual `cast` for core action).
-2. Position appears in adapter state after supply.
-3. Withdraw path executes only from Railgun callback sender and shields output to position owner hash.
-4. Same flow works on Arbitrum Sepolia with real Aave pool.
-
-## Risks / Known Constraints
-
-1. Railgun SDK method/shape can differ by version; verify against installed package APIs.
-2. Real Aave reserve limits may intermittently block supply (`error 51`); have fallback reserve.
-3. If testing with mock shield, explicitly restore real shield config after smoke runs.
-4. Local secret rotation is required after partial withdraw to avoid replay/failure.
+1. User can run private supply end-to-end from WebCLI.
+2. Position appears in adapter state.
+3. Private withdraw returns output to private balance.
+4. Position secret lifecycle is preserved (rotate/remove rules).
+5. Validation passes via:
+   - `bun run typecheck`
+   - `bun run build:web`

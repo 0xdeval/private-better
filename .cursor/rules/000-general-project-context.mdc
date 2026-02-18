@@ -43,4 +43,4 @@ The active product surface is the browser WebCLI (`src/webcli/app.ts`).
 2. Position secrets are stored locally and rotated on partial withdraw.
 3. Hinkal fees are runtime-estimated; keep private USDC reserve.
 4. Fee reserve guard is implemented in WebCLI preflight for supply/withdraw.
-5. Older `.cursor/rules` files mentioning Railgun phases are historical context only.
+5. Product focus is private supply; private borrow is planned next.

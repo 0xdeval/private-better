@@ -72,12 +72,7 @@ require_env DEPLOYER_PRIVATE_KEY
 require_env AAVE_POOL
 require_env SUPPLY_TOKEN
 require_env VAULT_FACTORY
-
-PRIVACY_EXECUTOR="${PRIVATE_EMPORIUM:-${PRIVACY_EXECUTOR:-}}"
-if [[ -z "${PRIVACY_EXECUTOR}" ]]; then
-  echo "Error: set PRIVATE_EMPORIUM (preferred) or PRIVACY_EXECUTOR in .env" >&2
-  exit 1
-fi
+require_env PRIVATE_EMPORIUM
 
 if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   echo "Error: DEPLOYER_PRIVATE_KEY must be 0x + 64 hex chars." >&2
@@ -90,14 +85,14 @@ for key in AAVE_POOL SUPPLY_TOKEN VAULT_FACTORY; do
     exit 1
   fi
 done
-if ! is_address "${PRIVACY_EXECUTOR}"; then
-  echo "Error: PRIVATE_EMPORIUM/PRIVACY_EXECUTOR must be a valid 0x address." >&2
+if ! is_address "${PRIVATE_EMPORIUM}"; then
+  echo "Error: PRIVATE_EMPORIUM must be a valid 0x address." >&2
   exit 1
 fi
 
 echo "Deploying PrivateSupplyAdapter..."
 echo "RPC:              ${RPC_URL}"
-echo "Emporium caller:  ${PRIVACY_EXECUTOR}"
+echo "Emporium caller:  ${PRIVATE_EMPORIUM}"
 echo "Aave pool:        ${AAVE_POOL}"
 echo "Supply token:     ${SUPPLY_TOKEN}"
 echo "Vault factory:    ${VAULT_FACTORY}"
@@ -107,7 +102,7 @@ DEPLOY_OUTPUT="$(forge create contracts/PrivateSupplyAdapter.sol:PrivateSupplyAd
   --private-key "${DEPLOYER_PRIVATE_KEY}" \
   --broadcast \
   --constructor-args \
-  "${PRIVACY_EXECUTOR}" \
+  "${PRIVATE_EMPORIUM}" \
   "${AAVE_POOL}" \
   "${SUPPLY_TOKEN}" \
   "${VAULT_FACTORY}" 2>&1)"
@@ -123,7 +118,7 @@ if [[ -z "${ADAPTER_ADDRESS}" ]]; then
   else
     echo "Error: could not parse deployed address from forge output." >&2
     echo "If needed, run manually:" >&2
-    echo "forge create contracts/PrivateSupplyAdapter.sol:PrivateSupplyAdapter --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast --constructor-args \"\${PRIVATE_EMPORIUM:-\$PRIVACY_EXECUTOR}\" \"\$AAVE_POOL\" \"\$SUPPLY_TOKEN\" \"\$VAULT_FACTORY\"" >&2
+    echo "forge create contracts/PrivateSupplyAdapter.sol:PrivateSupplyAdapter --rpc-url \"\$RPC_URL\" --private-key \"\$DEPLOYER_PRIVATE_KEY\" --broadcast --constructor-args \"\$PRIVATE_EMPORIUM\" \"\$AAVE_POOL\" \"\$SUPPLY_TOKEN\" \"\$VAULT_FACTORY\"" >&2
   fi
   exit 1
 fi

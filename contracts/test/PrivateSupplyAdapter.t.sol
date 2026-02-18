@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {PrivateSupplyAdapter} from "../PrivateSupplyAdapter.sol";
 import {VaultFactory} from "../VaultFactory.sol";
 import {MockAavePool} from "../mocks/MockAavePool.sol";
-import {MockPrivacyExecutor} from "../mocks/MockRailgun.sol";
+import {MockPrivacyExecutor} from "../mocks/MockPrivacyExecutor.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
 
 contract NonExecutorWithdrawCaller {

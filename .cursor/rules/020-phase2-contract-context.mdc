@@ -7,65 +7,40 @@ globs: *
 > - `.cursor/rules/000-general-project-context.mdc`
 > - `.cursor/rules/050-hinkal-webcli-handoff.mdc`
 
-# PHASE 2 CONTEXT (PRIVATE SUPPLY)
+# PHASE 2 CONTEXT (HISTORICAL CONTRACT MILESTONE)
 
-Objective:
+Phase 2 validated private supply plumbing through adapter/factory/vault patterns.
 
-- Validate `Unshield -> Vault (per zk owner) -> Aave supply` flow.
-
-Implemented contracts:
+## Contract Artifacts (still relevant)
 
 1. `contracts/PrivateSupplyAdapter.sol`
-- Callback entrypoint: `onRailgunUnshield(token, amount, data)`.
-- Decodes `SupplyRequest { zkOwnerHash }`.
-- Gets or creates user vault through `VaultFactory`.
-- Transfers token to vault and calls vault supply into Aave pool.
-- Stores `positions[positionId]`.
-
 2. `contracts/VaultFactory.sol`
-- One vault per `zkOwnerHash`.
-- `setAdapter` + `getOrCreateVault`.
-
 3. `contracts/UserVault.sol`
-- Isolated per-user vault.
-- `supply` and future-ready `withdrawToAdapter`.
-
 4. `contracts/mocks/MockAavePool.sol`
-- Deterministic supply accounting for tests/smoke.
-
-5. `contracts/mocks/MockRailgun.sol`
-- Mock callback + shield endpoint.
-
+5. `contracts/mocks/MockPrivacyExecutor.sol`
 6. `contracts/mocks/MockUSDC.sol`
-- 6-decimal ERC20 test token.
-
 7. `contracts/test/PrivateSupplyAdapter.t.sol`
-- Happy path + callback access control.
 
-Scripts:
+## Script Artifacts
 
 1. `scripts/deploy-vault-factory.sh`
-2. `scripts/deploy-mock-aave-pool.sh`
-3. `scripts/deploy-mock-railgun.sh`
-4. `scripts/deploy-private-supply-adapter.sh`
-5. `scripts/smoke-test-supply-adapter.sh`
+2. `scripts/deploy-private-supply-adapter.sh`
+3. `scripts/smoke-test-supply-adapter.sh`
+4. `scripts/smoke-test-withdraw-supply-adapter.sh`
+5. `scripts/sanity-check-mainnet-config.sh`
 
-Required env keys (phase 2):
+## Canonical Env Keys (current)
 
+- `PRIVATE_EMPORIUM`
 - `RPC_URL`
 - `DEPLOYER_PRIVATE_KEY`
 - `SUPPLY_TOKEN`
-- `MOCK_AAVE_POOL`
 - `AAVE_POOL`
-- `MOCK_RAILGUN`
 - `VAULT_FACTORY`
 - `PRIVATE_SUPPLY_ADAPTER`
-- `RAILGUN_CALLBACK_SENDER`
-- `RAILGUN_SHIELD`
-- Legacy `AMOY_*` keys are accepted as fallback in scripts.
 
-Do not regress:
+## Do Not Regress
 
-1. Keep `onlyRailgunCallback` restriction.
+1. Keep callback/executor access control restrictions.
 2. Keep per-user vault isolation (`zkOwnerHash -> vault`).
-3. Keep scripts using safe `.env` parser (no direct `source .env` assumptions).
+3. Keep script `.env` parsing deterministic and explicit.

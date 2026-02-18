@@ -5,7 +5,6 @@
   "private": true,
   "scripts": {
     "dev:web": "bunx --bun vite --force --port 3017 --strictPort",
-    "dev:cli": "bun run src/servercli/entry.ts",
     "build:web": "bunx --bun vite build",
     "preview:web": "bunx --bun vite preview --port 3017",
     "typecheck": "tsc --noEmit"

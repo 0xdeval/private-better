@@ -65,18 +65,11 @@ if ! command -v cast >/dev/null 2>&1; then
   exit 1
 fi
 
-for key in RPC_URL PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY PRIVACY_EXECUTOR; do
-  if [[ "${key}" == "PRIVACY_EXECUTOR" ]]; then
-    continue
-  fi
+for key in RPC_URL PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY PRIVATE_EMPORIUM; do
   require_env "${key}"
 done
 
-EXPECTED_EXECUTOR="${PRIVATE_EMPORIUM:-${PRIVACY_EXECUTOR:-}}"
-if [[ -z "${EXPECTED_EXECUTOR}" ]]; then
-  echo "Error: set PRIVATE_EMPORIUM (preferred) or PRIVACY_EXECUTOR in .env" >&2
-  exit 1
-fi
+EXPECTED_EXECUTOR="${PRIVATE_EMPORIUM}"
 
 for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY; do
   if ! is_address "${!key}"; then
@@ -85,7 +78,7 @@ for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY; do
   fi
 done
 if ! is_address "${EXPECTED_EXECUTOR}"; then
-  echo "Error: PRIVATE_EMPORIUM/PRIVACY_EXECUTOR is not a valid 0x address." >&2
+  echo "Error: PRIVATE_EMPORIUM is not a valid 0x address." >&2
   exit 1
 fi
 
