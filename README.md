@@ -3,6 +3,8 @@
 Private Better brings private DeFi UX to blue-chip yield: users can supply USDC to Aave from a private balance, keep strategy identity hidden, and withdraw back to private funds by default
 Privacy-preserving access to real Aave liquidity gives a user to earn yield without exposing his full onchain identity
 
+**The core privacy infrastructure that is used under the hood is provided by the [Hinkal protocol](https://hinkal.pro/)**
+
 ![value-flow](docs/value-flow.png)
 
 ## How does it work?

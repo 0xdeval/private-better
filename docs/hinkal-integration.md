@@ -1,6 +1,6 @@
 # Hinkal integration
 
-This document is a practical handoff for future development in this repository
+The core privacy infrastructure that is used under the hood is provided by the [Hinkal protocol](https://hinkal.pro/)
 
 ## 1. High-Level Architecture
 
