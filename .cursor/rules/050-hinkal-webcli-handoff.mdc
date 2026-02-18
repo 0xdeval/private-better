@@ -5,16 +5,16 @@ globs: *
 
 # HINKAL WEBCLI: CURRENT STATE
 
-This repository currently uses a Hinkal SDK integration in `src/webcli/app.ts` and `src/privacy/hinkalManager.ts`.
-There is no active server CLI source under `src/servercli` right now.
+This repository uses a Hinkal SDK integration in `src/webcli` and `src/privacy/hinkalManager.ts`.
+There is no active server CLI runtime.
 
 # MAIN USER FLOW
 
-1. `privacy-login` (or `privacy-import`) initializes private session.
-2. `approve-token` approves public USDC to Hinkal spender.
-3. `shield-token` moves public USDC to private spendable balance.
+1. `login` (or `import`) initializes private session.
+2. `approve` approves public USDC to Hinkal spender.
+3. `shield` moves public USDC to private spendable balance.
 4. `private-supply` creates Aave position from private balance.
-5. `show-positions` and `private-balance` inspect state.
+5. `supply-positions` and `private-balance` inspect state.
 6. `private-withdraw` withdraws position back to private balance.
 
 # IDENTITY MODEL
@@ -38,19 +38,30 @@ All three can differ. Do not assume they are equal.
    - `reserve = flatFee + max(flatFee * bufferBps, minBuffer)`.
 3. Default reserve config:
    - `bufferBps = 2000` (20%)
-   - `minBuffer = 0.002 USDC`
 4. User-visible fee lines are shown for supply and withdraw.
 5. If insufficient private balance for amount + reserve, command fails early with clear error.
 
 # CONFIG KEYS USED
 
-1. `VITE_PRIVATE_RPC`
-2. `VITE_PRIVATE_EMPORIUM`
-3. `VITE_PRIVATE_SUPPLY_ADAPTER`
-4. `VITE_SUPPLY_TOKEN`
-5. `VITE_PRIVATE_DEBUG` (optional)
+WebCLI:
+
+1. `VITE_PRIVATE_EMPORIUM`
+2. `VITE_PRIVATE_RPC`
+3. `VITE_PRIVATE_NETWORK`
+4. `VITE_PRIVATE_SUPPLY_ADAPTER`
+5. `VITE_SUPPLY_TOKEN`
 6. `VITE_PRIVATE_FEE_BUFFER_BPS` (optional)
-7. `VITE_PRIVATE_FEE_BUFFER_MIN` (optional, USDC units)
+7. `VITE_PRIVATE_DEBUG` (optional)
+
+Contracts/scripts:
+
+1. `PRIVATE_EMPORIUM`
+2. `RPC_URL`
+3. `DEPLOYER_PRIVATE_KEY`
+4. `AAVE_POOL`
+5. `SUPPLY_TOKEN`
+6. `VAULT_FACTORY`
+7. `PRIVATE_SUPPLY_ADAPTER`
 
 # COMMON FAILURE MODES
 
@@ -60,6 +71,11 @@ All three can differ. Do not assume they are equal.
    - adapter `privacyExecutor()` must equal configured Emporium.
 3. `Transfer Failed`:
    - often allowance/routing mismatch in the specific adapter execution path.
+
+# PRODUCT NOTES
+
+1. Withdraw auth is currently stored locally in browser session.
+2. Private borrow is planned as a next product capability after private supply.
 
 # CHANGE SAFETY
 

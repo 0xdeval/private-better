@@ -45,25 +45,13 @@ load_dotenv() {
 
 load_dotenv "${ENV_FILE}"
 
-resolve_env() {
-  local target="$1"
-  shift
-  for key in "$@"; do
-    if [[ -n "${!key:-}" ]]; then
-      export "${target}=${!key}"
-      return 0
-    fi
-  done
-  return 1
-}
-
 if ! command -v forge >/dev/null 2>&1; then
   echo "Error: forge is not installed or not in PATH." >&2
   exit 1
 fi
 
-if ! resolve_env RPC_URL RPC_URL AMOY_RPC_URL; then
-  echo "Error: RPC_URL is missing in .env (legacy fallback: AMOY_RPC_URL)." >&2
+if [[ -z "${RPC_URL:-}" ]]; then
+  echo "Error: RPC_URL is missing in .env." >&2
   exit 1
 fi
 
@@ -105,4 +93,3 @@ echo
 echo "VaultFactory deployed at: ${FACTORY_ADDRESS}"
 echo "Add/update this in .env:"
 echo "VAULT_FACTORY=${FACTORY_ADDRESS}"
-echo "(legacy fallback still accepted: AMOY_VAULT_FACTORY=${FACTORY_ADDRESS})"
