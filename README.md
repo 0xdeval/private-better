@@ -1,14 +1,23 @@
 # Overview
 
-Private Better is a Hinkal-based private liquidity supply on Aave on Arbitrum, exposed through a browser WebCLI
+Private Better brings private DeFi UX to blue-chip yield: users can supply USDC to Aave from a private balance, keep strategy identity hidden, and withdraw back to private funds by default
+Privacy-preserving access to real Aave liquidity gives a user to earn yield without exposing his full onchain identity
+
+![value-flow](docs/value-flow.png)
 
 ## How does it work?
+
+To get the full how the product works, you can refer to the [sequence diagram](https://github.com/0xdeval/private-better/blob/main/docs/sequence-diagram.png)
+
+Here is a short recap:
 
 1. Login/import private session (`login` / `import`)
 2. `approve 1` to approve 1 USDC (**better min 1 USDC for a smoother experience**)
 3. `shield 1` to add 1 USDC to a private wallet (**better min 1 USDC for a smoother experience**)
 4. `private-supply 1` supply USDC to AAVE as a collateral and start earning yield
 5. `private-withdraw max` withdraws back to private balance
+
+**Withdraw is private-destination by default (not public recipient)**
 
 ## Hinkal protocol integration
 
@@ -17,8 +26,6 @@ Get more about how the Hinkal protocol integration works on the ["Hinkal integra
 ## User flows
 
 Get more about user flows on the ["User flows" page](https://github.com/0xdeval/private-better/blob/main/docs/user-flows.md)
-
-**Withdraw is private-destination by default (not public recipient)**
 
 ### All WebCLI commands
 
