@@ -34,12 +34,18 @@ export const getSeedPhrases = (mnemonic: string): string[] => {
   return seedPhrases;
 };
 
-export const createToken = (chainId: number, tokenAddress: string): HinkalToken => ({
-  chainId,
-  erc20TokenAddress: tokenAddress,
-  name: 'USDC',
-  symbol: 'USDC',
-  decimals: 6,
+export const createToken = (params: {
+  chainId: number;
+  tokenAddress: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+}): HinkalToken => ({
+  chainId: params.chainId,
+  erc20TokenAddress: params.tokenAddress,
+  name: params.name,
+  symbol: params.symbol,
+  decimals: params.decimals,
 });
 
 export const createSubAccount = (

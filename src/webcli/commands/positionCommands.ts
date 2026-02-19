@@ -13,19 +13,19 @@ export const privateSupplyCommand = async (
   await runtime.ensurePrivacyInitialized();
 
   const session = runtime.requireActiveSession();
-  const amount = parseTokenAmount(amountText);
+  const supplyToken = runtime.getSupplyTokenConfig();
+  const amount = parseTokenAmount(amountText, supplyToken.decimals);
   const adapterAddress = runtime.getAdapterAddress();
-  const tokenAddress = runtime.getSupplyTokenAddress();
   const emporiumAddress = runtime.getEmporiumAddress();
 
   const { provider, signerAddress } = await runtime.getSigner();
   runtime.assertSessionEoa(session, signerAddress);
   const signer = await runtime.getBoundSigner(provider, signerAddress);
-  await runtime.validatePrivateSupplyConfig(provider, adapterAddress, tokenAddress, emporiumAddress);
+  await runtime.validatePrivateSupplyConfig(provider, adapterAddress, supplyToken.address, emporiumAddress);
 
   runtime.write('Building private supply transaction...', 'muted');
   const adapter = new Contract(adapterAddress, ADAPTER_ABI, provider) as any;
-  const erc20 = new Contract(tokenAddress, ERC20_ABI, provider) as any;
+  const erc20 = new Contract(supplyToken.address, ERC20_ABI, provider) as any;
   const spender = await runtime.manager.getShieldSpender({
     mnemonic: session.mnemonic,
     publicWallet: signer,
@@ -35,12 +35,12 @@ export const privateSupplyCommand = async (
     erc20.allowance(signerAddress, spender),
   ]);
   runtime.debug(
-    `private-supply preflight: publicBalance=${formatTokenAmount(publicBalance)} allowanceToHinkal=${formatTokenAmount(allowanceToSpender)}`,
+    `private-supply preflight: publicBalance=${formatTokenAmount(publicBalance, supplyToken.decimals)} allowanceToHinkal=${formatTokenAmount(allowanceToSpender, supplyToken.decimals)}`,
   );
 
   const privateSpendableBalance = await runtime.manager.getPrivateSpendableBalance({
     mnemonic: session.mnemonic,
-    tokenAddress,
+    tokenAddress: supplyToken.address,
     publicWallet: signer,
   });
   const privateActionContext = await runtime.manager.getPrivateActionContext({
@@ -51,7 +51,7 @@ export const privateSupplyCommand = async (
 
   if (privateSpendableBalance < amount) {
     throw new Error(
-      `Insufficient private spendable balance. Need ${amountText}, available ${formatTokenAmount(privateSpendableBalance)}.`,
+      `Insufficient private spendable balance. Need ${amountText}, available ${formatTokenAmount(privateSpendableBalance, supplyToken.decimals)}.`,
     );
   }
 
@@ -59,15 +59,15 @@ export const privateSupplyCommand = async (
   const withdrawAuthHash = ethers.utils.keccak256(withdrawAuthSecret);
   const supplyOps = runtime.buildPrivateSupplyOps({
     adapterAddress,
-    tokenAddress,
+    tokenAddress: supplyToken.address,
     amount,
     zkOwnerHash,
     withdrawAuthHash,
   });
   const estimatedFlatFee = await runtime.estimateEmporiumFlatFee({
     walletAddress: privateActionContext.subAccountAddress,
-    feeTokenAddress: tokenAddress,
-    erc20Addresses: [tokenAddress],
+    feeTokenAddress: supplyToken.address,
+    erc20Addresses: [supplyToken.address],
     ops: supplyOps,
   });
 
@@ -75,13 +75,13 @@ export const privateSupplyCommand = async (
     const { reserve } = runtime.getBufferedFeeReserve(estimatedFlatFee);
     const requiredTotal = amount + reserve;
     runtime.write(
-      `Fee estimate (supply): flatFee=${formatTokenAmount(estimatedFlatFee)} reserve=${formatTokenAmount(reserve)} required=${formatTokenAmount(requiredTotal)}`,
+      `Fee estimate (supply): flatFee=${formatTokenAmount(estimatedFlatFee, supplyToken.decimals)} reserve=${formatTokenAmount(reserve, supplyToken.decimals)} required=${formatTokenAmount(requiredTotal, supplyToken.decimals)}`,
       'muted',
     );
     runtime.debugFeeEstimate('supply-fee', estimatedFlatFee, reserve, requiredTotal);
     if (privateSpendableBalance < requiredTotal) {
       throw new Error(
-        `Insufficient private spendable balance for supply + fee reserve. Need ${formatTokenAmount(requiredTotal)}, available ${formatTokenAmount(privateSpendableBalance)}.`,
+        `Insufficient private spendable balance for supply + fee reserve. Need ${formatTokenAmount(requiredTotal, supplyToken.decimals)}, available ${formatTokenAmount(privateSpendableBalance, supplyToken.decimals)}.`,
       );
     }
   }
@@ -96,7 +96,7 @@ export const privateSupplyCommand = async (
       mnemonic: session.mnemonic,
       publicWallet: signer,
       adapterAddress,
-      tokenAddress,
+      token: supplyToken,
       amount,
       zkOwnerHash,
       withdrawAuthHash,
@@ -105,7 +105,7 @@ export const privateSupplyCommand = async (
     const message = error instanceof Error ? error.message : String(error);
     if (message.toLowerCase().includes('insufficient funds')) {
       throw new Error(
-        `Insufficient private funds for supply + Hinkal fee. Current private spendable=${formatTokenAmount(privateSpendableBalance)}. Try a smaller amount or shield more USDC first.`,
+        `Insufficient private funds for supply + Hinkal fee. Current private spendable=${formatTokenAmount(privateSpendableBalance, supplyToken.decimals)}. Try a smaller amount or shield more USDC first.`,
       );
     }
     throw error;
@@ -128,6 +128,7 @@ export const privateSupplyCommand = async (
 export const supplyPositionsCommand = async (runtime: WebCliRuntime) => {
   await runtime.ensureTargetNetwork();
   const session = runtime.requireActiveSession();
+  const supplyToken = runtime.getSupplyTokenConfig();
   const { provider } = await runtime.getSigner();
   const adapterAddress = runtime.getAdapterAddress();
   const adapter = new Contract(adapterAddress, ADAPTER_ABI, provider) as any;
@@ -150,7 +151,7 @@ export const supplyPositionsCommand = async (runtime: WebCliRuntime) => {
     const vault = position[1] as string;
     const hasLocalSecret = Boolean(session.positionSecrets[id.toString()]);
     runtime.write(
-      `- #${id.toString()} token=${token} vault=${vault} amount=${formatTokenAmount(amount)} secret=${hasLocalSecret ? 'yes' : 'no'}`,
+      `- #${id.toString()} token=${token} vault=${vault} collateral=${formatTokenAmount(amount, supplyToken.decimals)} secret=${hasLocalSecret ? 'yes' : 'no'}`,
     );
   }
 };
@@ -170,7 +171,7 @@ export const privateWithdrawCommand = async (
 
   const adapterAddress = runtime.getAdapterAddress();
   const emporiumAddress = runtime.getEmporiumAddress();
-  const tokenAddress = runtime.getSupplyTokenAddress();
+  const supplyToken = runtime.getSupplyTokenConfig();
   const positionId = BigInt(positionIdText);
   const isMaxWithdraw = amountText.toLowerCase() === 'max';
   const currentSecret = session.positionSecrets[positionId.toString()];
@@ -190,10 +191,10 @@ export const privateWithdrawCommand = async (
     throw new Error(`Position ${positionId.toString()} has no withdrawable amount.`);
   }
 
-  let amount = isMaxWithdraw ? positionAmount : parseTokenAmount(amountText);
+  let amount = isMaxWithdraw ? positionAmount : parseTokenAmount(amountText, supplyToken.decimals);
   if (!isMaxWithdraw && amount > positionAmount) {
     throw new Error(
-      `Withdraw amount exceeds position balance. Requested ${amountText}, available ${formatTokenAmount(positionAmount)}.`,
+      `Withdraw amount exceeds position balance. Requested ${amountText}, available ${formatTokenAmount(positionAmount, supplyToken.decimals)}.`,
     );
   }
 
@@ -202,7 +203,7 @@ export const privateWithdrawCommand = async (
   const [privateSpendableBalance, privateActionContext] = await Promise.all([
     runtime.manager.getPrivateSpendableBalance({
       mnemonic: session.mnemonic,
-      tokenAddress,
+      tokenAddress: supplyToken.address,
       publicWallet: signer,
     }),
     runtime.manager.getPrivateActionContext({
@@ -220,20 +221,20 @@ export const privateWithdrawCommand = async (
   });
   const estimatedFlatFee = await runtime.estimateEmporiumFlatFee({
     walletAddress: privateActionContext.subAccountAddress,
-    feeTokenAddress: tokenAddress,
-    erc20Addresses: [tokenAddress],
+    feeTokenAddress: supplyToken.address,
+    erc20Addresses: [supplyToken.address],
     ops: withdrawOps,
   });
   if (estimatedFlatFee != null) {
     const { reserve } = runtime.getBufferedFeeReserve(estimatedFlatFee);
     runtime.write(
-      `Fee estimate (withdraw): flatFee=${formatTokenAmount(estimatedFlatFee)} reserve=${formatTokenAmount(reserve)} requiredPrivateBalance=${formatTokenAmount(reserve)}`,
+      `Fee estimate (withdraw): flatFee=${formatTokenAmount(estimatedFlatFee, supplyToken.decimals)} reserve=${formatTokenAmount(reserve, supplyToken.decimals)} requiredPrivateBalance=${formatTokenAmount(reserve, supplyToken.decimals)}`,
       'muted',
     );
     runtime.debugFeeEstimate('withdraw-fee', estimatedFlatFee, reserve, reserve);
     if (privateSpendableBalance < reserve) {
       throw new Error(
-        `Insufficient private spendable balance for withdraw fee reserve. Need ${formatTokenAmount(reserve)}, available ${formatTokenAmount(privateSpendableBalance)}. Shield more USDC before withdrawing.`,
+        `Insufficient private spendable balance for withdraw fee reserve. Need ${formatTokenAmount(reserve, supplyToken.decimals)}, available ${formatTokenAmount(privateSpendableBalance, supplyToken.decimals)}. Shield more USDC before withdrawing.`,
       );
     }
   }
@@ -246,7 +247,7 @@ export const privateWithdrawCommand = async (
       publicWallet: signer,
       adapterAddress,
       emporiumAddress,
-      tokenAddress,
+      token: supplyToken,
       positionId,
       amount,
       withdrawAuthSecret: currentSecret,
@@ -257,21 +258,25 @@ export const privateWithdrawCommand = async (
     const isAaveMaxDustError =
       isMaxWithdraw &&
       amount > 1n &&
-      (errorText.includes('47bc4b2c') || errorText.includes('notenoughavailableuserbalance'));
+      (
+        errorText.includes('47bc4b2c') ||
+        errorText.includes('notenoughavailableuserbalance') ||
+        errorText.includes('balance diff should be equal to sum of onchain and offchain created commitments')
+      );
     if (!isAaveMaxDustError) {
       throw error;
     }
 
     amount -= 1n;
     runtime.debug(
-      `private-withdraw max fallback: retrying with ${formatTokenAmount(amount)} due to Aave available-balance rounding`,
+      `private-withdraw max fallback: retrying with ${formatTokenAmount(amount, supplyToken.decimals)} due to Aave available-balance rounding`,
     );
     txHash = await runtime.manager.privateWithdraw({
       mnemonic: session.mnemonic,
       publicWallet: signer,
       adapterAddress,
       emporiumAddress,
-      tokenAddress,
+      token: supplyToken,
       positionId,
       amount,
       withdrawAuthSecret: currentSecret,
@@ -292,7 +297,236 @@ export const privateWithdrawCommand = async (
   session.positionSecrets[positionId.toString()] = nextSecret;
   await runtime.saveActiveSession();
   runtime.write(
-    `Position ${positionId.toString()} updated. Remaining amount=${formatTokenAmount(remainingAmount)}. Secret rotated.`,
+    `Position ${positionId.toString()} updated. Remaining amount=${formatTokenAmount(remainingAmount, supplyToken.decimals)}. Secret rotated.`,
+    'ok',
+  );
+};
+
+export const privateBorrowCommand = async (
+  runtime: WebCliRuntime,
+  positionIdText: string | undefined,
+  amountText: string | undefined,
+) => {
+  if (!positionIdText || !amountText) {
+    throw new Error('Usage: private-borrow <positionId> <amount>');
+  }
+
+  const session = runtime.requireActiveSession();
+  await runtime.ensureTargetNetwork();
+  await runtime.ensurePrivacyInitialized();
+
+  const adapterAddress = runtime.getAdapterAddress();
+  const emporiumAddress = runtime.getEmporiumAddress();
+  const supplyToken = runtime.getSupplyTokenConfig();
+  const borrowToken = runtime.getBorrowWethTokenConfig();
+  const positionId = BigInt(positionIdText);
+  const amount = parseTokenAmount(amountText, borrowToken.decimals);
+  const currentSecret = session.positionSecrets[positionId.toString()];
+  if (!currentSecret) {
+    throw new Error(
+      `No local auth secret found for position ${positionId.toString()}. Use supply-positions and ensure this browser created the position.`,
+    );
+  }
+
+  const { provider, signerAddress } = await runtime.getSigner();
+  runtime.assertSessionEoa(session, signerAddress);
+  const signer = await runtime.getBoundSigner(provider, signerAddress);
+  await runtime.validatePrivateBorrowConfig(
+    provider,
+    adapterAddress,
+    supplyToken.address,
+    borrowToken.address,
+    emporiumAddress,
+  );
+
+  const adapter = new Contract(adapterAddress, ADAPTER_ABI, provider) as any;
+  const positionBefore = await adapter.positions(positionId);
+  const collateralAmount = BigInt((positionBefore[3] as BigNumber).toString());
+  if (collateralAmount <= 0n) {
+    throw new Error(`Position ${positionId.toString()} has no collateral and cannot borrow.`);
+  }
+
+  const nextSecret = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+  const nextAuthHash = ethers.utils.keccak256(nextSecret);
+  const [privateUsdcBalance, privateActionContext] = await Promise.all([
+    runtime.manager.getPrivateSpendableBalance({
+      mnemonic: session.mnemonic,
+      tokenAddress: supplyToken.address,
+      publicWallet: signer,
+    }),
+    runtime.manager.getPrivateActionContext({
+      mnemonic: session.mnemonic,
+      publicWallet: signer,
+    }),
+  ]);
+
+  const borrowOps = runtime.buildPrivateBorrowOps({
+    adapterAddress,
+    emporiumAddress,
+    debtTokenAddress: borrowToken.address,
+    positionId,
+    amount,
+    authSecret: currentSecret,
+    nextAuthHash,
+  });
+  const estimatedFlatFee = await runtime.estimateEmporiumFlatFee({
+    walletAddress: privateActionContext.subAccountAddress,
+    feeTokenAddress: supplyToken.address,
+    erc20Addresses: [supplyToken.address, borrowToken.address],
+    ops: borrowOps,
+  });
+  if (estimatedFlatFee != null) {
+    const { reserve } = runtime.getBufferedFeeReserve(estimatedFlatFee);
+    runtime.write(
+      `Fee estimate (borrow): flatFee=${formatTokenAmount(estimatedFlatFee, supplyToken.decimals)} reserve=${formatTokenAmount(reserve, supplyToken.decimals)} requiredPrivateUSDC=${formatTokenAmount(reserve, supplyToken.decimals)}`,
+      'muted',
+    );
+    runtime.debugFeeEstimate('borrow-fee', estimatedFlatFee, reserve, reserve);
+    if (privateUsdcBalance < reserve) {
+      throw new Error(
+        `Insufficient private USDC for borrow fee reserve. Need ${formatTokenAmount(reserve, supplyToken.decimals)}, available ${formatTokenAmount(privateUsdcBalance, supplyToken.decimals)}.`,
+      );
+    }
+  }
+
+  runtime.write('Borrowing WETH to private balance...', 'muted');
+  const txHash = await runtime.manager.privateBorrow({
+    mnemonic: session.mnemonic,
+    publicWallet: signer,
+    adapterAddress,
+    emporiumAddress,
+    borrowToken,
+    feeToken: supplyToken,
+    positionId,
+    amount,
+    authSecret: currentSecret,
+    nextAuthHash,
+  });
+  runtime.write(`Private borrow tx: ${txHash}`, 'ok');
+
+  session.positionSecrets[positionId.toString()] = nextSecret;
+  await runtime.saveActiveSession();
+  runtime.write(
+    `Position ${positionId.toString()} borrowed ${formatTokenAmount(amount, borrowToken.decimals)} ${borrowToken.symbol}. Secret rotated.`,
+    'ok',
+  );
+};
+
+export const privateRepayCommand = async (
+  runtime: WebCliRuntime,
+  positionIdText: string | undefined,
+  amountText: string | undefined,
+) => {
+  if (!positionIdText || !amountText) {
+    throw new Error('Usage: private-repay <positionId> <amount>');
+  }
+
+  const session = runtime.requireActiveSession();
+  await runtime.ensureTargetNetwork();
+  await runtime.ensurePrivacyInitialized();
+
+  const adapterAddress = runtime.getAdapterAddress();
+  const emporiumAddress = runtime.getEmporiumAddress();
+  const supplyToken = runtime.getSupplyTokenConfig();
+  const borrowToken = runtime.getBorrowWethTokenConfig();
+  const positionId = BigInt(positionIdText);
+  const amount = parseTokenAmount(amountText, borrowToken.decimals);
+  const currentSecret = session.positionSecrets[positionId.toString()];
+  if (!currentSecret) {
+    throw new Error(
+      `No local auth secret found for position ${positionId.toString()}. Use supply-positions and ensure this browser created the position.`,
+    );
+  }
+
+  const { provider, signerAddress } = await runtime.getSigner();
+  runtime.assertSessionEoa(session, signerAddress);
+  const signer = await runtime.getBoundSigner(provider, signerAddress);
+  await runtime.validatePrivateBorrowConfig(
+    provider,
+    adapterAddress,
+    supplyToken.address,
+    borrowToken.address,
+    emporiumAddress,
+  );
+
+  const adapter = new Contract(adapterAddress, ADAPTER_ABI, provider) as any;
+  const positionBefore = await adapter.positions(positionId);
+  const collateralAmount = BigInt((positionBefore[3] as BigNumber).toString());
+  if (collateralAmount <= 0n) {
+    throw new Error(`Position ${positionId.toString()} is empty.`);
+  }
+
+  const nextSecret = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+  const nextAuthHash = ethers.utils.keccak256(nextSecret);
+  const [privateWethBalance, privateUsdcBalance, privateActionContext] = await Promise.all([
+    runtime.manager.getPrivateSpendableBalance({
+      mnemonic: session.mnemonic,
+      tokenAddress: borrowToken.address,
+      publicWallet: signer,
+    }),
+    runtime.manager.getPrivateSpendableBalance({
+      mnemonic: session.mnemonic,
+      tokenAddress: supplyToken.address,
+      publicWallet: signer,
+    }),
+    runtime.manager.getPrivateActionContext({
+      mnemonic: session.mnemonic,
+      publicWallet: signer,
+    }),
+  ]);
+
+  if (privateWethBalance < amount) {
+    throw new Error(
+      `Insufficient private ${borrowToken.symbol} for repay. Need ${formatTokenAmount(amount, borrowToken.decimals)}, available ${formatTokenAmount(privateWethBalance, borrowToken.decimals)}.`,
+    );
+  }
+
+  const repayOps = runtime.buildPrivateRepayOps({
+    adapterAddress,
+    debtTokenAddress: borrowToken.address,
+    positionId,
+    amount,
+    authSecret: currentSecret,
+    nextAuthHash,
+  });
+  const estimatedFlatFee = await runtime.estimateEmporiumFlatFee({
+    walletAddress: privateActionContext.subAccountAddress,
+    feeTokenAddress: supplyToken.address,
+    erc20Addresses: [supplyToken.address, borrowToken.address],
+    ops: repayOps,
+  });
+  if (estimatedFlatFee != null) {
+    const { reserve } = runtime.getBufferedFeeReserve(estimatedFlatFee);
+    runtime.write(
+      `Fee estimate (repay): flatFee=${formatTokenAmount(estimatedFlatFee, supplyToken.decimals)} reserve=${formatTokenAmount(reserve, supplyToken.decimals)} requiredPrivateUSDC=${formatTokenAmount(reserve, supplyToken.decimals)}`,
+      'muted',
+    );
+    runtime.debugFeeEstimate('repay-fee', estimatedFlatFee, reserve, reserve);
+    if (privateUsdcBalance < reserve) {
+      throw new Error(
+        `Insufficient private USDC for repay fee reserve. Need ${formatTokenAmount(reserve, supplyToken.decimals)}, available ${formatTokenAmount(privateUsdcBalance, supplyToken.decimals)}.`,
+      );
+    }
+  }
+
+  runtime.write('Repaying WETH debt from private balance...', 'muted');
+  const txHash = await runtime.manager.privateRepay({
+    mnemonic: session.mnemonic,
+    publicWallet: signer,
+    adapterAddress,
+    debtToken: borrowToken,
+    feeToken: supplyToken,
+    positionId,
+    amount,
+    authSecret: currentSecret,
+    nextAuthHash,
+  });
+  runtime.write(`Private repay tx: ${txHash}`, 'ok');
+
+  session.positionSecrets[positionId.toString()] = nextSecret;
+  await runtime.saveActiveSession();
+  runtime.write(
+    `Position ${positionId.toString()} repaid ${formatTokenAmount(amount, borrowToken.decimals)} ${borrowToken.symbol}. Secret rotated.`,
     'ok',
   );
 };

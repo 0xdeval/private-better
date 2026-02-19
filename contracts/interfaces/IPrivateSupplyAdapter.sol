@@ -16,6 +16,23 @@ interface IPrivateSupplyAdapter {
     address recipient
   ) external returns (uint256 withdrawnAmount);
 
+  function borrowToRecipient(
+    uint256 positionId,
+    address debtToken,
+    uint256 amount,
+    bytes32 authSecret,
+    bytes32 nextAuthHash,
+    address recipient
+  ) external returns (uint256 borrowedAmount);
+
+  function repayFromPrivate(
+    uint256 positionId,
+    address debtToken,
+    uint256 amount,
+    bytes32 authSecret,
+    bytes32 nextAuthHash
+  ) external returns (uint256 repaidAmount);
+
   function getOwnerPositionIds(
     bytes32 zkOwnerHash,
     uint256 offset,

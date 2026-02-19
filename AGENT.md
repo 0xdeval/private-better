@@ -6,11 +6,11 @@ This file is the canonical handoff context for future agents working on this rep
 
 The active runtime is a Hinkal-based browser WebCLI on Arbitrum.
 
-- Private actions: shield, unshield, private supply, private withdraw.
+- Private actions: shield, unshield, unshield-weth, private supply, private borrow, private repay, private withdraw.
 - Withdraw currently returns to private balance by default.
-- Fee reserve preflight guard is implemented for supply/withdraw.
+- Fee reserve preflight guard is implemented for supply/withdraw/borrow/repay (USDC fee token).
 - Withdraw auth secrets are currently stored locally in browser session.
-- Product focus is private supply; private borrow is planned next.
+- Borrow path is USDC collateral -> WETH debt (adapter allowlist controlled by `setBorrowTokenAllowed`).
 
 Railgun phase documents are historical context only.
 
@@ -21,7 +21,8 @@ Railgun phase documents are historical context only.
 ├─ README.md
 ├─ AGENT.md
 ├─ docs/
-│  └─ hinkal-webcli-notes.md
+│  ├─ hinkal-integration.md
+│  └─ user-flows.md
 ├─ .cursor/
 │  └─ rules/
 ├─ src/
@@ -58,11 +59,18 @@ Railgun phase documents are historical context only.
 │     ├─ MockPrivacyExecutor.sol
 │     └─ MockUSDC.sol
 └─ scripts/
-   ├─ deploy-vault-factory.sh
-   ├─ deploy-private-supply-adapter.sh
-   ├─ smoke-test-supply-adapter.sh
-   ├─ smoke-test-withdraw-supply-adapter.sh
-   └─ sanity-check-mainnet-config.sh
+   ├─ sanity-check-mainnet-config.sh
+   ├─ deploy-contracts/
+   │  ├─ deploy-vault-factory.sh
+   │  └─ deploy-private-supply-adapter.sh
+   ├─ smoke-tests/
+   │  ├─ smoke-test-supply-adapter.sh
+   │  ├─ smoke-test-withdraw-supply-adapter.sh
+   │  ├─ smoke-test-borrow-supply-adapter.sh
+   │  └─ smoke-test-repay-supply-adapter.sh
+   └─ contracts-verification/
+      ├─ verify-vault-factory-blockscout.sh
+      └─ verify-private-supply-adapter-blockscout.sh
 ```
 
 ## 3. User Command Surface
@@ -74,19 +82,22 @@ Railgun phase documents are historical context only.
 5. `approve <amount>`
 6. `shield <amount>`
 7. `unshield <amount> [recipient]`
-8. `private-balance`
-9. `private-supply <amount>`
-10. `supply-positions`
-11. `private-withdraw <positionId> <amount|max>`
+8. `unshield-weth <amount> [recipient]`
+9. `private-balance [usdc|weth]`
+10. `private-supply <amount>`
+11. `supply-positions`
+12. `private-borrow <positionId> <amount>`
+13. `private-repay <positionId> <amount>`
+14. `private-withdraw <positionId> <amount|max>`
 
 ## 4. Critical Behavioral Invariants
 
 1. Do not break `private-supply` flow unless explicitly requested.
 2. Keep `private-withdraw` private-destination semantics:
 - adapter recipient is Emporium
-- Hinkal recipient metadata is provided (`recipientData`)
+- no public recipient address should be required in WebCLI
 3. Preserve per-position secret lifecycle:
-- rotate on partial withdraw
+- rotate on borrow/repay/partial-withdraw
 - remove on full close
 4. Keep max-withdraw fallback retry for Aave rounding edge case (`0x47bc4b2c`).
 5. Do not edit `node_modules`.
@@ -113,9 +124,10 @@ WebCLI:
 2. `VITE_PRIVATE_RPC`
 3. `VITE_PRIVATE_NETWORK`
 4. `VITE_SUPPLY_TOKEN`
-5. `VITE_PRIVATE_SUPPLY_ADAPTER`
-6. `VITE_PRIVATE_FEE_BUFFER_BPS` (optional)
-7. `VITE_PRIVATE_DEBUG` (optional)
+5. `VITE_BORROW_TOKEN_WETH`
+6. `VITE_PRIVATE_SUPPLY_ADAPTER`
+7. `VITE_PRIVATE_FEE_BUFFER_BPS` (optional)
+8. `VITE_PRIVATE_DEBUG` (optional)
 
 Contracts/scripts:
 
@@ -124,8 +136,10 @@ Contracts/scripts:
 3. `DEPLOYER_PRIVATE_KEY`
 4. `AAVE_POOL`
 5. `SUPPLY_TOKEN`
-6. `VAULT_FACTORY`
-7. `PRIVATE_SUPPLY_ADAPTER`
+6. `BORROW_TOKEN`
+7. `VAULT_FACTORY`
+8. `PRIVATE_SUPPLY_ADAPTER`
+9. `BLOCKSCOUT_VERIFIER_URL` (optional, default: `https://arbitrum.blockscout.com/api/`)
 
 ## 7. Common Failure Causes
 
@@ -135,7 +149,10 @@ Contracts/scripts:
 2. Adapter executor mismatch
 - adapter `privacyExecutor()` differs from configured Emporium.
 
-3. `Transfer Failed`
+3. Borrow token disabled
+- adapter `isBorrowTokenAllowed(BORROW_TOKEN)` is false.
+
+4. `Transfer Failed`
 - token routing/allowance mismatch in adapter path.
 
 ## 8. Agent Workflow Expectations
@@ -144,9 +161,14 @@ Contracts/scripts:
 2. Validate after changes:
 - `bun run typecheck`
 - `bun run build:web`
-3. Keep docs updated when behavior changes:
+3. Smoke scripts (`supply` / `borrow` / `repay`) are cleanup-by-default:
+- they return assets to deployer wallet unless `SMOKE_CLEANUP=false`.
+- preserve `SMOKE_WITHDRAW_SECRET_LABEL` if cleanup is disabled.
+- scripts are under `scripts/smoke-tests/`.
+4. Keep docs updated when behavior changes:
 - `README.md`
 - `AGENT.md`
-- `docs/hinkal-webcli-notes.md`
+- `docs/hinkal-integration.md`
+- `docs/user-flows.md`
 - `.cursor/rules/*`
 - `contracts/README.md`

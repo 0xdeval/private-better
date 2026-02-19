@@ -91,6 +91,7 @@ require_env RPC_URL
 require_env DEPLOYER_PRIVATE_KEY
 require_env PRIVATE_SUPPLY_ADAPTER
 require_env SUPPLY_TOKEN
+require_env BORROW_TOKEN
 require_env AAVE_POOL
 require_env VAULT_FACTORY
 
@@ -99,7 +100,7 @@ if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   exit 1
 fi
 
-for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY; do
+for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN BORROW_TOKEN AAVE_POOL VAULT_FACTORY; do
   if ! is_address "${!key}"; then
     echo "Error: ${key} must be a valid 0x address." >&2
     exit 1
@@ -108,17 +109,93 @@ done
 
 SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}" # 1 token with 6 decimals
 SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL:-zk-owner-supply-smoke}"
-SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-withdraw-secret-supply-smoke}"
+SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-smoke-$(date +%Y%m%d-%H%M%S)-supply}"
 SMOKE_SET_EXECUTOR_TO_DEPLOYER="${SMOKE_SET_EXECUTOR_TO_DEPLOYER:-true}"
 SMOKE_RESTORE_EXECUTOR="${SMOKE_RESTORE_EXECUTOR:-true}"
+SMOKE_CLEANUP="${SMOKE_CLEANUP:-true}"
+MAX_UINT="115792089237316195423570985008687907853269984665640564039457584007913129639935"
+ZERO_HASH="0x0000000000000000000000000000000000000000000000000000000000000000"
 
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "${DEPLOYER_PRIVATE_KEY}")"
 ORIGINAL_EXECUTOR="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "privacyExecutor()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_TOKEN="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "supplyToken()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_POOL="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "aavePool()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_FACTORY="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "vaultFactory()(address)" --rpc-url "${RPC_URL}")"
+ADAPTER_BORROW_ALLOWED="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "isBorrowTokenAllowed(address)(bool)" "${BORROW_TOKEN}" --rpc-url "${RPC_URL}")"
 DEPLOYER_TOKEN_BALANCE_RAW="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${DEPLOYER_ADDRESS}" --rpc-url "${RPC_URL}")"
 DEPLOYER_TOKEN_BALANCE="$(normalize_uint_output "${DEPLOYER_TOKEN_BALANCE_RAW}")"
+EXECUTOR_CHANGED=false
+
+cleanup_on_exit() {
+  if [[ "${EXECUTOR_CHANGED}" == "true" ]] && is_true "${SMOKE_RESTORE_EXECUTOR}"; then
+    cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+      "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
+      --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_on_exit EXIT
+
+restore_executor() {
+  if is_true "${SMOKE_RESTORE_EXECUTOR}"; then
+    echo "Restoring privacy executor..."
+    cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+      "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
+      --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+    EXECUTOR_CHANGED=false
+  fi
+}
+
+cleanup_position() {
+  local position_id="$1"
+  local current_secret="$2"
+  local next_secret="$3"
+
+  local tuple amount_raw amount amount_minus_one next_hash
+  tuple="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
+    "positions(uint256)(bytes32,address,address,uint256,bytes32)" "${position_id}" \
+    --rpc-url "${RPC_URL}")"
+  amount_raw="$(echo "${tuple}" | awk 'NR==4{print $1}')"
+  amount="$(normalize_uint_output "${amount_raw}")"
+  if ! [[ "${amount}" =~ ^[0-9]+$ ]] || (( amount == 0 )); then
+    echo "Cleanup: position ${position_id} already closed."
+    return 0
+  fi
+
+  echo "Cleanup: trying max-withdraw for position ${position_id}..."
+  local output=""
+  if output="$(cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+    "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)" \
+    "${position_id}" "${MAX_UINT}" "${current_secret}" "${ZERO_HASH}" "${DEPLOYER_ADDRESS}" \
+    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" 2>&1)"; then
+    echo "Cleanup: position ${position_id} closed with max-withdraw."
+    return 0
+  fi
+
+  if [[ "${output}" != *"47bc4b2c"* && "${output}" != *"NotEnoughAvailableUserBalance"* ]]; then
+    echo "${output}" >&2
+    return 1
+  fi
+
+  if (( amount <= 1 )); then
+    echo "Cleanup warning: position ${position_id} has tiny residual amount=${amount}; skipping." >&2
+    return 0
+  fi
+
+  amount_minus_one=$((amount - 1))
+  next_hash="$(cast keccak "${next_secret}")"
+  echo "Cleanup: fallback withdraw ${amount_minus_one}, then try final 1..."
+  cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+    "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)" \
+    "${position_id}" "${amount_minus_one}" "${current_secret}" "${next_hash}" "${DEPLOYER_ADDRESS}" \
+    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+
+  if ! cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+    "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)" \
+    "${position_id}" "1" "${next_secret}" "${ZERO_HASH}" "${DEPLOYER_ADDRESS}" \
+    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null 2>&1; then
+    echo "Cleanup warning: position ${position_id} left with 1 raw unit dust due Aave rounding." >&2
+  fi
+}
 
 
 echo "Starting PrivateSupplyAdapter smoke test"
@@ -127,8 +204,10 @@ echo "Deployer:           ${DEPLOYER_ADDRESS}"
 echo "Adapter:            ${PRIVATE_SUPPLY_ADAPTER}"
 echo "Aave pool (env/adp):${AAVE_POOL} / ${ADAPTER_POOL}"
 echo "Token (env/adp):    ${SUPPLY_TOKEN} / ${ADAPTER_TOKEN}"
+echo "Borrow token (env): ${BORROW_TOKEN}"
 echo "Factory (env/adp):  ${VAULT_FACTORY} / ${ADAPTER_FACTORY}"
 echo "Executor (orig):    ${ORIGINAL_EXECUTOR}"
+echo "Borrow allowed:     ${ADAPTER_BORROW_ALLOWED}"
 echo "Deployer token bal: ${DEPLOYER_TOKEN_BALANCE}"
 
 if [[ "$(to_lower "${ADAPTER_TOKEN}")" != "$(to_lower "${SUPPLY_TOKEN}")" ]]; then
@@ -141,6 +220,10 @@ if [[ "$(to_lower "${ADAPTER_POOL}")" != "$(to_lower "${AAVE_POOL}")" ]]; then
 fi
 if [[ "$(to_lower "${ADAPTER_FACTORY}")" != "$(to_lower "${VAULT_FACTORY}")" ]]; then
   echo "Error: adapter vaultFactory() does not match VAULT_FACTORY." >&2
+  exit 1
+fi
+if [[ "$(to_lower "${ADAPTER_BORROW_ALLOWED}")" != "true" ]]; then
+  echo "Error: adapter borrow token is not allowlisted." >&2
   exit 1
 fi
 if ! [[ "${DEPLOYER_TOKEN_BALANCE}" =~ ^[0-9]+$ ]]; then
@@ -161,6 +244,7 @@ if is_true "${SMOKE_SET_EXECUTOR_TO_DEPLOYER}"; then
   cast send "${PRIVATE_SUPPLY_ADAPTER}" \
     "setPrivacyExecutor(address)" "${DEPLOYER_ADDRESS}" \
     --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+  EXECUTOR_CHANGED=true
 fi
 
 echo "Step 2/6: Funding adapter with stake token..."
@@ -180,6 +264,14 @@ REQUEST_DATA="$(
     const coder = defaultAbiCoder;
     console.log(coder.encode(["tuple(bytes32,bytes32)"], [[zkOwnerHash, withdrawAuthHash]]));
   '
+)"
+WITHDRAW_SECRET="$(
+  SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
+  bun -e 'import { ethers } from "ethers"; console.log(ethers.utils.keccak256(ethers.utils.toUtf8Bytes(process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-supply-smoke")));'
+)"
+CLEANUP_NEXT_SECRET="$(
+  SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL}" \
+  bun -e 'import { ethers } from "ethers"; console.log(ethers.utils.keccak256(ethers.utils.toUtf8Bytes((process.env.SMOKE_WITHDRAW_SECRET_LABEL ?? "withdraw-secret-supply-smoke") + "-cleanup")));'
 )"
 
 NEXT_POSITION_ID="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "nextPositionId()(uint256)" --rpc-url "${RPC_URL}")"
@@ -215,11 +307,30 @@ echo "- position tuple: ${POSITION}"
 echo "- vault: ${VAULT_ADDRESS}"
 echo "- suppliedBalance(vault, token): ${AAVE_SUPPLIED}"
 
-if is_true "${SMOKE_RESTORE_EXECUTOR}"; then
-  echo "Restoring privacy executor..."
-  cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
-    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+if is_true "${SMOKE_CLEANUP}"; then
+  echo "Cleanup: withdrawing supplied collateral back to deployer..."
+  cleanup_position "${EXPECTED_POSITION_ID}" "${WITHDRAW_SECRET}" "${CLEANUP_NEXT_SECRET}"
+  POST_TUPLE="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
+    "positions(uint256)(bytes32,address,address,uint256,bytes32)" "${EXPECTED_POSITION_ID}" \
+    --rpc-url "${RPC_URL}")"
+  POST_AMOUNT_RAW="$(echo "${POST_TUPLE}" | awk 'NR==4{print $1}')"
+  POST_AMOUNT="$(normalize_uint_output "${POST_AMOUNT_RAW}")"
+  if [[ "${POST_AMOUNT}" =~ ^[0-9]+$ ]] && (( POST_AMOUNT > 1 )); then
+    echo "Error: cleanup failed, residual collateral amount=${POST_AMOUNT} on position ${EXPECTED_POSITION_ID}." >&2
+    restore_executor
+    exit 1
+  fi
+fi
+
+restore_executor
+
+FINAL_BALANCE_RAW="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${DEPLOYER_ADDRESS}" --rpc-url "${RPC_URL}")"
+FINAL_BALANCE="$(normalize_uint_output "${FINAL_BALANCE_RAW}")"
+echo "- deployer final token balance (raw): ${FINAL_BALANCE}"
+if is_true "${SMOKE_CLEANUP}"; then
+  if (( FINAL_BALANCE + 2 < DEPLOYER_TOKEN_BALANCE )); then
+    echo "Warning: final balance is materially lower than start. Check open positions/debt." >&2
+  fi
 fi
 
 echo

@@ -7,7 +7,7 @@ import {MockAavePool} from "../mocks/MockAavePool.sol";
 import {MockPrivacyExecutor} from "../mocks/MockPrivacyExecutor.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
 
-contract NonExecutorWithdrawCaller {
+contract NonExecutorActionCaller {
   function callWithdraw(
     address adapter,
     uint256 positionId,
@@ -27,33 +27,83 @@ contract NonExecutorWithdrawCaller {
       )
     );
   }
+
+  function callBorrow(
+    address adapter,
+    uint256 positionId,
+    address debtToken,
+    uint256 amount,
+    bytes32 authSecret,
+    bytes32 nextAuthHash,
+    address recipient
+  ) external returns (bool ok) {
+    (ok, ) = adapter.call(
+      abi.encodeWithSignature(
+        "borrowToRecipient(uint256,address,uint256,bytes32,bytes32,address)",
+        positionId,
+        debtToken,
+        amount,
+        authSecret,
+        nextAuthHash,
+        recipient
+      )
+    );
+  }
+
+  function callRepay(
+    address adapter,
+    uint256 positionId,
+    address debtToken,
+    uint256 amount,
+    bytes32 authSecret,
+    bytes32 nextAuthHash
+  ) external returns (bool ok) {
+    (ok, ) = adapter.call(
+      abi.encodeWithSignature(
+        "repayFromPrivate(uint256,address,uint256,bytes32,bytes32)",
+        positionId,
+        debtToken,
+        amount,
+        authSecret,
+        nextAuthHash
+      )
+    );
+  }
 }
 
 contract PrivateSupplyAdapterTest {
   MockUSDC internal usdc;
+  MockUSDC internal weth;
   MockAavePool internal aavePool;
   MockPrivacyExecutor internal executor;
   VaultFactory internal factory;
   PrivateSupplyAdapter internal adapter;
-  NonExecutorWithdrawCaller internal nonExecutorCaller;
+  NonExecutorActionCaller internal nonExecutorCaller;
 
   uint256 internal constant USDC_1 = 1_000_000;
   uint256 internal constant STAKE = 100 * USDC_1;
+  uint256 internal constant BORROW_AMOUNT = 20 * USDC_1;
 
   function setUp() public {
     usdc = new MockUSDC();
+    weth = new MockUSDC();
     aavePool = new MockAavePool();
     executor = new MockPrivacyExecutor();
     factory = new VaultFactory();
     adapter = new PrivateSupplyAdapter(address(executor), address(aavePool), address(usdc), address(factory));
-    nonExecutorCaller = new NonExecutorWithdrawCaller();
+    nonExecutorCaller = new NonExecutorActionCaller();
 
     factory.setAdapter(address(adapter));
     executor.setAdapter(address(adapter));
+    adapter.setBorrowTokenAllowed(address(weth), true);
 
     usdc.mint(address(this), 2_000 * USDC_1);
     usdc.approve(address(executor), type(uint256).max);
     executor.depositToken(address(usdc), 600 * USDC_1);
+
+    weth.mint(address(this), 2_000 * USDC_1);
+    weth.mint(address(aavePool), 2_000 * USDC_1);
+    weth.approve(address(executor), type(uint256).max);
   }
 
   function testPrivateDepositFlowStoresWithdrawAuthAndOwnerIndex() public {
@@ -212,6 +262,173 @@ contract PrivateSupplyAdapterTest {
       )
     );
     require(okNew, "new secret should pass");
+  }
+
+  function testBorrowToRecipientWithCorrectSecret() public {
+    (uint256 positionId, bytes32 withdrawAuthSecret) = _openPosition("zk-owner-borrow-ok", "borrow-secret-ok");
+    bytes32 nextSecret = keccak256("borrow-secret-next");
+    bytes32 nextHash = keccak256(abi.encodePacked(nextSecret));
+    address recipient = address(0xCAFE);
+    uint256 beforeRecipient = weth.balanceOf(recipient);
+
+    uint256 borrowed = executor.executePrivateBorrow(
+      positionId,
+      address(weth),
+      BORROW_AMOUNT,
+      withdrawAuthSecret,
+      nextHash,
+      recipient
+    );
+    require(borrowed == BORROW_AMOUNT, "borrow amount mismatch");
+
+    (, address vault, , uint256 amountAfter, bytes32 storedHash) = adapter.positions(positionId);
+    require(amountAfter == STAKE, "collateral amount should remain");
+    require(storedHash == nextHash, "borrow should rotate auth hash");
+    require(aavePool.variableDebt(vault, address(weth)) == BORROW_AMOUNT, "debt not tracked");
+
+    uint256 afterRecipient = weth.balanceOf(recipient);
+    require(afterRecipient - beforeRecipient == BORROW_AMOUNT, "recipient did not receive borrow");
+  }
+
+  function testBorrowRevertsForWrongSecret() public {
+    (uint256 positionId, ) = _openPosition("zk-owner-borrow-wrong-secret", "borrow-secret-main");
+    bytes32 wrongSecret = keccak256("borrow-secret-wrong");
+    bytes32 nextHash = keccak256(abi.encodePacked(keccak256("borrow-next")));
+
+    (bool ok, ) = address(executor).call(
+      abi.encodeWithSignature(
+        "executePrivateBorrow(uint256,address,uint256,bytes32,bytes32,address)",
+        positionId,
+        address(weth),
+        BORROW_AMOUNT,
+        wrongSecret,
+        nextHash,
+        address(this)
+      )
+    );
+    require(!ok, "borrow with wrong secret should fail");
+  }
+
+  function testOnlyExecutorCanBorrowToRecipient() public {
+    (uint256 positionId, bytes32 withdrawAuthSecret) = _openPosition("zk-owner-borrow-only-executor", "borrow-secret");
+    bytes32 nextHash = keccak256(abi.encodePacked(keccak256("borrow-next-only")));
+
+    bool ok = nonExecutorCaller.callBorrow(
+      address(adapter),
+      positionId,
+      address(weth),
+      BORROW_AMOUNT,
+      withdrawAuthSecret,
+      nextHash,
+      address(this)
+    );
+    require(!ok, "non-executor borrow should fail");
+  }
+
+  function testBorrowRevertsForUnsupportedToken() public {
+    (uint256 positionId, bytes32 withdrawAuthSecret) = _openPosition("zk-owner-borrow-unsupported", "borrow-secret");
+    MockUSDC unsupported = new MockUSDC();
+    unsupported.mint(address(aavePool), 1_000 * USDC_1);
+
+    bytes32 nextHash = keccak256(abi.encodePacked(keccak256("unsupported-next")));
+    (bool ok, ) = address(executor).call(
+      abi.encodeWithSignature(
+        "executePrivateBorrow(uint256,address,uint256,bytes32,bytes32,address)",
+        positionId,
+        address(unsupported),
+        BORROW_AMOUNT,
+        withdrawAuthSecret,
+        nextHash,
+        address(this)
+      )
+    );
+    require(!ok, "unsupported borrow token should fail");
+  }
+
+  function testRepayFromPrivateReducesDebtAndRotatesSecret() public {
+    (uint256 positionId, bytes32 firstSecret) = _openPosition("zk-owner-repay-ok", "repay-secret-first");
+    bytes32 secondSecret = keccak256("repay-secret-second");
+    bytes32 secondHash = keccak256(abi.encodePacked(secondSecret));
+
+    executor.executePrivateBorrow(positionId, address(weth), BORROW_AMOUNT, firstSecret, secondHash, address(this));
+    executor.depositToken(address(weth), BORROW_AMOUNT);
+
+    bytes32 thirdSecret = keccak256("repay-secret-third");
+    bytes32 thirdHash = keccak256(abi.encodePacked(thirdSecret));
+    uint256 repaid = executor.executePrivateRepay(positionId, address(weth), BORROW_AMOUNT, secondSecret, thirdHash);
+    require(repaid == BORROW_AMOUNT, "repaid amount mismatch");
+
+    (, address vault, , , bytes32 storedHash) = adapter.positions(positionId);
+    require(aavePool.variableDebt(vault, address(weth)) == 0, "debt should be repaid");
+    require(storedHash == thirdHash, "repay should rotate hash");
+  }
+
+  function testRepayRevertsForWrongSecret() public {
+    (uint256 positionId, bytes32 firstSecret) = _openPosition("zk-owner-repay-wrong-secret", "repay-secret-first");
+    bytes32 secondSecret = keccak256("repay-secret-second");
+    bytes32 secondHash = keccak256(abi.encodePacked(secondSecret));
+    executor.executePrivateBorrow(positionId, address(weth), BORROW_AMOUNT, firstSecret, secondHash, address(this));
+    executor.depositToken(address(weth), BORROW_AMOUNT);
+
+    bytes32 wrongSecret = keccak256("repay-secret-wrong");
+    bytes32 nextHash = keccak256(abi.encodePacked(keccak256("repay-next")));
+    (bool ok, ) = address(executor).call(
+      abi.encodeWithSignature(
+        "executePrivateRepay(uint256,address,uint256,bytes32,bytes32)",
+        positionId,
+        address(weth),
+        BORROW_AMOUNT,
+        wrongSecret,
+        nextHash
+      )
+    );
+    require(!ok, "repay with wrong secret should fail");
+  }
+
+  function testBorrowAndRepaySecretRotationInvalidatesOldSecret() public {
+    (uint256 positionId, bytes32 firstSecret) = _openPosition("zk-owner-secret-rotation", "secret-1");
+    bytes32 secondSecret = keccak256("secret-2");
+    bytes32 secondHash = keccak256(abi.encodePacked(secondSecret));
+
+    executor.executePrivateBorrow(positionId, address(weth), BORROW_AMOUNT, firstSecret, secondHash, address(this));
+
+    bytes32 thirdHash = keccak256(abi.encodePacked(keccak256("secret-3")));
+    (bool okOld, ) = address(executor).call(
+      abi.encodeWithSignature(
+        "executePrivateBorrow(uint256,address,uint256,bytes32,bytes32,address)",
+        positionId,
+        address(weth),
+        1,
+        firstSecret,
+        thirdHash,
+        address(this)
+      )
+    );
+    require(!okOld, "old secret should fail after borrow rotation");
+
+    executor.depositToken(address(weth), BORROW_AMOUNT);
+    (bool okNew, ) = address(executor).call(
+      abi.encodeWithSignature(
+        "executePrivateRepay(uint256,address,uint256,bytes32,bytes32)",
+        positionId,
+        address(weth),
+        BORROW_AMOUNT,
+        secondSecret,
+        thirdHash
+      )
+    );
+    require(okNew, "new rotated secret should pass");
+  }
+
+  function _openPosition(
+    string memory ownerLabel,
+    string memory secretLabel
+  ) internal returns (uint256 positionId, bytes32 withdrawAuthSecret) {
+    bytes32 zkOwnerHash = keccak256(bytes(ownerLabel));
+    withdrawAuthSecret = keccak256(bytes(secretLabel));
+    bytes32 withdrawAuthHash = keccak256(abi.encodePacked(withdrawAuthSecret));
+    bytes memory data = _supplyRequestData(zkOwnerHash, withdrawAuthHash);
+    positionId = executor.executePrivateDeposit(address(usdc), STAKE, data);
   }
 
   function _supplyRequestData(bytes32 zkOwnerHash, bytes32 withdrawAuthHash) internal pure returns (bytes memory) {

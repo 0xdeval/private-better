@@ -6,9 +6,12 @@ import {
   loginCommand,
   privateBalanceCommand,
   shieldCommand,
+  unshieldWethCommand,
   unshieldCommand,
 } from './commands/accountCommands';
 import {
+  privateBorrowCommand,
+  privateRepayCommand,
   privateSupplyCommand,
   privateWithdrawCommand,
   supplyPositionsCommand,
@@ -40,17 +43,26 @@ export const executeCommand = async (runtime: WebCliRuntime, raw: string): Promi
       case 'unshield':
         await unshieldCommand(runtime, args[0], args[1]);
         return;
+      case 'unshield-weth':
+        await unshieldWethCommand(runtime, args[0], args[1]);
+        return;
       case 'private-supply':
         await privateSupplyCommand(runtime, args[0]);
         return;
       case 'private-balance':
-        await privateBalanceCommand(runtime);
+        await privateBalanceCommand(runtime, args[0]);
         return;
       case 'supply-positions':
         await supplyPositionsCommand(runtime);
         return;
       case 'private-withdraw':
         await privateWithdrawCommand(runtime, args[0], args[1]);
+        return;
+      case 'private-borrow':
+        await privateBorrowCommand(runtime, args[0], args[1]);
+        return;
+      case 'private-repay':
+        await privateRepayCommand(runtime, args[0], args[1]);
         return;
       default:
         runtime.write(`Unknown command: ${cmd}. Type help.`, 'err');

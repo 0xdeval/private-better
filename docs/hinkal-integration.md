@@ -11,7 +11,9 @@ The core privacy infrastructure that is used under the hood is provided by the [
    - transfer USDC to adapter
    - call adapter `onPrivateDeposit`
 5. Adapter routes supply into vault/Aave position
-6. Private withdraw calls adapter `withdrawToRecipient` and returns output to private balance
+6. Private borrow calls adapter `borrowToRecipient` and credits borrowed WETH back to private balance
+7. Private repay transfers WETH to adapter and calls `repayFromPrivate`
+8. Private withdraw calls adapter `withdrawToRecipient` and returns output to private balance
 
 ## 2. Address Model
 
@@ -23,11 +25,11 @@ Three addresses can differ:
 
 Do not treat these as interchangeable
 
-## 3. AAVE private supply
+## 3. AAVE private supply + borrow
 
 ### Supply method
 
-- Validates chain + adapter confi.
+- Validates chain + adapter config.
 - Checks private spendable balance
 - Pre-estimates Hinkal fee and enforces a reserve guard
 - Stores `withdrawAuthSecret` locally in session after position creation
@@ -40,6 +42,23 @@ Do not treat these as interchangeable
 - Resolves `max` to exact on-chain position amount
 - Includes fallback retry with `amount - 1` for Aave rounding edge case
 - Rotates secret on partial withdraw; removes on full close
+
+### Borrow method
+
+- Requires adapter borrow-token allowlist (`setBorrowTokenAllowed`)
+- Uses same per-position auth secret model as withdraw
+- Borrows with Aave variable rate mode (2)
+- Routes borrowed WETH to Emporium and credits private balance
+- Rotates secret after successful borrow
+
+### Repay method
+
+- Builds two Emporium ops:
+  - transfer WETH to adapter
+  - call `repayFromPrivate`
+- Uses same per-position auth secret model
+- Pays Hinkal fee in USDC (same reserve guard policy)
+- Rotates secret after successful repay
 
 ## 4. Fee model
 
@@ -56,6 +75,8 @@ User-visible lines are printed before submit:
 
 - `Fee estimate (supply): flatFee=... reserve=... required=...`
 - `Fee estimate (withdraw): flatFee=... reserve=... requiredPrivateBalance=...`
+- `Fee estimate (borrow): flatFee=... reserve=... requiredPrivateUSDC=...`
+- `Fee estimate (repay): flatFee=... reserve=... requiredPrivateUSDC=...`
 
 ## 5. Storage
 
@@ -76,3 +97,7 @@ Most common root cause: private spendable is below action amount plus fee reserv
 ### Transfer Failed
 
 Often allowance/token routing mismatch in adapter path; inspect preflight logs
+
+### Borrow token not enabled
+
+Adapter must allowlist configured WETH via `setBorrowTokenAllowed`.

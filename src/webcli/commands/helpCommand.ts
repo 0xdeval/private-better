@@ -9,10 +9,13 @@ export const helpCommand = (runtime: WebCliRuntime) => {
   runtime.write('approve <amount> e.g. approve 1.5');
   runtime.write('shield <amount> e.g. shield 1.5');
   runtime.write('unshield <amount> [recipient] e.g. unshield 0.5');
-  runtime.write('private-balance');
+  runtime.write('unshield-weth <amount> [recipient] e.g. unshield-weth 0.01');
+  runtime.write('private-balance [usdc|weth]');
   runtime.write('private-supply <amount> e.g. private-supply 1.0');
   runtime.write('supply-positions');
   runtime.write(
     'private-withdraw <positionId> <amount|max> e.g. private-withdraw 1 max',
   );
+  runtime.write('private-borrow <positionId> <amount> e.g. private-borrow 1 0.01');
+  runtime.write('private-repay <positionId> <amount> e.g. private-repay 1 0.005');
 };

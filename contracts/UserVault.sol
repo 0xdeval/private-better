@@ -5,6 +5,7 @@ import {IAavePool} from "./interfaces/IAavePool.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 
 contract UserVault {
+  uint256 private constant VARIABLE_INTEREST_RATE_MODE = 2;
   address public immutable adapter;
 
   modifier onlyAdapter() {
@@ -37,5 +38,38 @@ contract UserVault {
     require(aavePool != address(0), "UserVault: zero pool");
     require(recipient != address(0), "UserVault: zero recipient");
     return IAavePool(aavePool).withdraw(token, amount, recipient);
+  }
+
+  function borrowTo(
+    address token,
+    address aavePool,
+    uint256 amount,
+    address recipient,
+    uint256 interestRateMode
+  ) external onlyAdapter {
+    require(token != address(0), "UserVault: zero token");
+    require(aavePool != address(0), "UserVault: zero pool");
+    require(recipient != address(0), "UserVault: zero recipient");
+    require(amount > 0, "UserVault: zero amount");
+    require(interestRateMode == VARIABLE_INTEREST_RATE_MODE, "UserVault: unsupported rate mode");
+
+    IAavePool(aavePool).borrow(token, amount, interestRateMode, 0, address(this));
+    require(IERC20(token).transfer(recipient, amount), "UserVault: transfer out failed");
+  }
+
+  function repayFromVaultBalance(
+    address token,
+    address aavePool,
+    uint256 amount,
+    uint256 interestRateMode
+  ) external onlyAdapter returns (uint256) {
+    require(token != address(0), "UserVault: zero token");
+    require(aavePool != address(0), "UserVault: zero pool");
+    require(amount > 0, "UserVault: zero amount");
+    require(interestRateMode == VARIABLE_INTEREST_RATE_MODE, "UserVault: unsupported rate mode");
+
+    require(IERC20(token).approve(aavePool, 0), "UserVault: reset approve failed");
+    require(IERC20(token).approve(aavePool, amount), "UserVault: approve failed");
+    return IAavePool(aavePool).repay(token, amount, interestRateMode, address(this));
   }
 }

@@ -7,6 +7,7 @@ import {
 } from '@hinkal/common';
 
 import {
+  BORROW_TOKEN_WETH_ADDRESS,
   PRIVATE_CHAIN,
   PRIVATE_CHAIN_PARAMS,
   PRIVATE_EMPORIUM_ADDRESS,
@@ -22,10 +23,17 @@ import {
   type PrivacyLocalSession,
 } from '../privacy/privacySession';
 import {
+  BORROW_WETH_TOKEN_CONFIG,
+  type CliTokenConfig,
+  SUPPLY_TOKEN_CONFIG,
+  DEFAULT_PRIVATE_FEE_BUFFER_BPS,
+  FEE_BPS_DENOMINATOR,
+  DEFAULT_PRIVATE_FEE_BUFFER_MIN,
+} from './constants';
+import {
   formatTokenAmount,
   parseTokenAmount,
 } from './amounts';
-import { DEFAULT_PRIVATE_FEE_BUFFER_BPS, FEE_BPS_DENOMINATOR, DEFAULT_PRIVATE_FEE_BUFFER_MIN } from './constants';
 import type {
   ActivePrivacySession,
   EthereumProvider,
@@ -70,12 +78,15 @@ export class WebCliRuntime {
     this.write('2) approve 1 -> approve token to Hinkal shield contract', 'muted');
     this.write('3) shield 1 -> shield token to private balance', 'muted');
     this.write('4) unshield 1 -> unshield token to public wallet', 'muted');
-    this.write('5) private-balance -> show spendable private token balance', 'muted');
+    this.write('5) private-balance [usdc|weth] -> show spendable private token balance', 'muted');
     this.write('6) private-supply 1 -> create private supply position on Aave', 'muted');
     this.write(
       '7) private-withdraw <positionId> <amount|max> -> withdraw from Aave position to private balance',
       'muted',
     );
+    this.write('8) private-borrow <positionId> <amount> -> borrow WETH to private balance', 'muted');
+    this.write('9) private-repay <positionId> <amount> -> repay WETH debt from private balance', 'muted');
+    this.write('10) unshield-weth <amount> [recipient] -> unshield private WETH', 'muted');
   }
 
   isDebugEnabled(): boolean {
@@ -189,6 +200,24 @@ export class WebCliRuntime {
     return this.requireEnvAddress('VITE_SUPPLY_TOKEN', SUPPLY_TOKEN_ADDRESS);
   }
 
+  getBorrowTokenWethAddress(): string {
+    return this.requireEnvAddress('VITE_BORROW_TOKEN_WETH', BORROW_TOKEN_WETH_ADDRESS);
+  }
+
+  getSupplyTokenConfig(): CliTokenConfig & { address: string } {
+    return {
+      ...SUPPLY_TOKEN_CONFIG,
+      address: this.getSupplyTokenAddress(),
+    };
+  }
+
+  getBorrowWethTokenConfig(): CliTokenConfig & { address: string } {
+    return {
+      ...BORROW_WETH_TOKEN_CONFIG,
+      address: this.getBorrowTokenWethAddress(),
+    };
+  }
+
   getAdapterAddress(): string {
     return this.requireEnvAddress('VITE_PRIVATE_SUPPLY_ADAPTER', PRIVATE_SUPPLY_ADAPTER_ADDRESS);
   }
@@ -212,7 +241,7 @@ export class WebCliRuntime {
     const raw = env?.VITE_PRIVATE_FEE_BUFFER_MIN;
     if (!raw) return DEFAULT_PRIVATE_FEE_BUFFER_MIN;
     try {
-      return parseTokenAmount(raw);
+      return parseTokenAmount(raw, SUPPLY_TOKEN_CONFIG.decimals);
     } catch {
       this.debug(`Invalid VITE_PRIVATE_FEE_BUFFER_MIN="${raw}". Using default.`);
       return DEFAULT_PRIVATE_FEE_BUFFER_MIN;
@@ -292,6 +321,70 @@ export class WebCliRuntime {
           params.nextWithdrawAuthHash,
           params.emporiumAddress,
         ]),
+      }),
+    ];
+  }
+
+  buildPrivateBorrowOps(params: {
+    adapterAddress: string;
+    emporiumAddress: string;
+    debtTokenAddress: string;
+    positionId: bigint;
+    amount: bigint;
+    authSecret: string;
+    nextAuthHash: string;
+  }): string[] {
+    const adapterInterface = new ethers.utils.Interface([
+      'function borrowToRecipient(uint256 positionId, address debtToken, uint256 amount, bytes32 authSecret, bytes32 nextAuthHash, address recipient) returns (uint256)',
+    ]);
+    return [
+      emporiumOp({
+        contract: params.adapterAddress,
+        callDataString: adapterInterface.encodeFunctionData('borrowToRecipient', [
+          params.positionId,
+          params.debtTokenAddress,
+          params.amount,
+          params.authSecret,
+          params.nextAuthHash,
+          params.emporiumAddress,
+        ]),
+      }),
+    ];
+  }
+
+  buildPrivateRepayOps(params: {
+    adapterAddress: string;
+    debtTokenAddress: string;
+    positionId: bigint;
+    amount: bigint;
+    authSecret: string;
+    nextAuthHash: string;
+  }): string[] {
+    const erc20Interface = new ethers.utils.Interface([
+      'function transfer(address to, uint256 amount) returns (bool)',
+    ]);
+    const adapterInterface = new ethers.utils.Interface([
+      'function repayFromPrivate(uint256 positionId, address debtToken, uint256 amount, bytes32 authSecret, bytes32 nextAuthHash) returns (uint256)',
+    ]);
+    return [
+      emporiumOp({
+        contract: params.debtTokenAddress,
+        callDataString: erc20Interface.encodeFunctionData('transfer', [
+          params.adapterAddress,
+          params.amount,
+        ]),
+        invokeWallet: false,
+      }),
+      emporiumOp({
+        contract: params.adapterAddress,
+        callDataString: adapterInterface.encodeFunctionData('repayFromPrivate', [
+          params.positionId,
+          params.debtTokenAddress,
+          params.amount,
+          params.authSecret,
+          params.nextAuthHash,
+        ]),
+        invokeWallet: false,
       }),
     ];
   }
@@ -437,6 +530,25 @@ export class WebCliRuntime {
     }
   }
 
+  async validatePrivateBorrowConfig(
+    provider: ethers.providers.Web3Provider,
+    adapterAddress: string,
+    supplyTokenAddress: string,
+    borrowTokenAddress: string,
+    emporiumAddress: string,
+  ): Promise<void> {
+    await this.validatePrivateSupplyConfig(provider, adapterAddress, supplyTokenAddress, emporiumAddress);
+    const adapter = new Contract(adapterAddress, [
+      'function isBorrowTokenAllowed(address token) view returns (bool)',
+    ], provider) as any;
+    const isAllowed = await adapter.isBorrowTokenAllowed(borrowTokenAddress);
+    if (!isAllowed) {
+      throw new Error(
+        `Borrow token is not enabled in adapter. Configure via setBorrowTokenAllowed(${borrowTokenAddress}, true).`,
+      );
+    }
+  }
+
   formatError(error: unknown): string {
     if (error instanceof Error) {
       const maybeRpcError = error as Error & EthereumRpcError;
@@ -460,9 +572,9 @@ export class WebCliRuntime {
   }
 
   debugFeeEstimate(label: string, flatFee: bigint, reserve: bigint, required?: bigint) {
-    const requiredPart = required == null ? '' : ` required=${formatTokenAmount(required)}`;
+    const requiredPart = required == null ? '' : ` required=${formatTokenAmount(required, SUPPLY_TOKEN_CONFIG.decimals)}`;
     this.debug(
-      `${label}: flatFee=${formatTokenAmount(flatFee)} reserve=${formatTokenAmount(reserve)}${requiredPart}`,
+      `${label}: flatFee=${formatTokenAmount(flatFee, SUPPLY_TOKEN_CONFIG.decimals)} reserve=${formatTokenAmount(reserve, SUPPLY_TOKEN_CONFIG.decimals)}${requiredPart}`,
     );
   }
 }

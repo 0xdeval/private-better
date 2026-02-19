@@ -63,3 +63,64 @@ export const buildPrivateWithdrawOp = (params: {
     ]),
   });
 };
+
+export const buildPrivateBorrowOp = (params: {
+  adapterAddress: string;
+  emporiumAddress: string;
+  positionId: bigint;
+  debtToken: string;
+  amount: bigint;
+  authSecret: string;
+  nextAuthHash: string;
+}): string => {
+  const adapterInterface = new ethers.utils.Interface([
+    'function borrowToRecipient(uint256 positionId, address debtToken, uint256 amount, bytes32 authSecret, bytes32 nextAuthHash, address recipient) returns (uint256)',
+  ]);
+
+  return emporiumOp({
+    contract: params.adapterAddress,
+    callDataString: adapterInterface.encodeFunctionData('borrowToRecipient', [
+      params.positionId,
+      params.debtToken,
+      params.amount,
+      params.authSecret,
+      params.nextAuthHash,
+      params.emporiumAddress,
+    ]),
+  });
+};
+
+export const buildPrivateRepayOps = (params: {
+  adapterAddress: string;
+  debtToken: string;
+  positionId: bigint;
+  amount: bigint;
+  authSecret: string;
+  nextAuthHash: string;
+}): string[] => {
+  const erc20Interface = new ethers.utils.Interface([
+    'function transfer(address to, uint256 amount) returns (bool)',
+  ]);
+  const adapterInterface = new ethers.utils.Interface([
+    'function repayFromPrivate(uint256 positionId, address debtToken, uint256 amount, bytes32 authSecret, bytes32 nextAuthHash) returns (uint256)',
+  ]);
+
+  return [
+    emporiumOp({
+      contract: params.debtToken,
+      callDataString: erc20Interface.encodeFunctionData('transfer', [params.adapterAddress, params.amount]),
+      invokeWallet: false,
+    }),
+    emporiumOp({
+      contract: params.adapterAddress,
+      callDataString: adapterInterface.encodeFunctionData('repayFromPrivate', [
+        params.positionId,
+        params.debtToken,
+        params.amount,
+        params.authSecret,
+        params.nextAuthHash,
+      ]),
+      invokeWallet: false,
+    }),
+  ];
+};
