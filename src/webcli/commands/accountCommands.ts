@@ -228,11 +228,20 @@ export const privateBalanceCommand = async (
   }
   const token = normalized === 'weth' ? runtime.getBorrowWethTokenConfig() : runtime.getSupplyTokenConfig();
 
-  const balance = await runtime.manager.getPrivateSpendableBalance({
+  let balance = await runtime.manager.getPrivateSpendableBalance({
     mnemonic: session.mnemonic,
     tokenAddress: token.address,
     publicWallet: signer,
   });
+  if (balance === 0n) {
+    balance = await runtime.manager.getPrivateSpendableBalance({
+      mnemonic: session.mnemonic,
+      tokenAddress: token.address,
+      publicWallet: signer,
+      forceRefresh: true,
+    });
+    runtime.write('Synced private balance from latest snapshot.', 'muted');
+  }
   runtime.write(
     `Private spendable ${token.symbol} balance: ${formatTokenAmount(balance, token.decimals)}`,
     'ok',

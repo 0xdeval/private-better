@@ -9,6 +9,7 @@ Here are scenarios how the product works on the UI and contract side for private
   - secret must match current stored hash
   - successful borrow/repay rotates the hash.
 - Borrow/repay fee reserve checks are enforced in private USDC by WebCLI before submission.
+- WebCLI currently prints `WithdrawAuth backup` in terminal after secret-changing actions; if leaked, the latest secret can be used to control that position.
 
 ### Evaluation walkthrough
 

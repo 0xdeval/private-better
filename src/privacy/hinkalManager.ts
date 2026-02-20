@@ -1,4 +1,4 @@
-import { Wallet, type Signer } from 'ethers';
+import { Wallet, ethers, type Signer } from 'ethers';
 import { prepareEthersHinkal } from '@hinkal/common/providers/prepareEthersHinkal';
 
 import { HINKAL_CONTRACT_TYPE, PRIVATE_CHAIN_ID } from './hinkal/constants';
@@ -58,6 +58,10 @@ export class HinkalManager {
     return PRIVATE_CHAIN_ID;
   }
 
+  private getSessionKey(mnemonic: string, signerAddress: string): string {
+    return `${this.getChainId()}:${signerAddress.toLowerCase()}:${mnemonic}`;
+  }
+
   private toHinkalToken(token: ActionToken) {
     return createToken({
       chainId: this.getChainId(),
@@ -71,7 +75,7 @@ export class HinkalManager {
   private async getSessionHinkal(mnemonic: string, publicWallet: Signer): Promise<HinkalLike> {
     this.ensureInitialized();
     const signerAddress = (await publicWallet.getAddress()).toLowerCase();
-    const sessionKey = `${this.getChainId()}:${signerAddress}:${mnemonic}`;
+    const sessionKey = this.getSessionKey(mnemonic, signerAddress);
     const existing = this.sessions.get(sessionKey);
     if (existing) return existing;
 
@@ -87,8 +91,15 @@ export class HinkalManager {
         throw new Error(`Hinkal SDK is unavailable at runtime. ${message}`);
       }
 
-      await hinkal.initUserKeysFromSeedPhrases(getSeedPhrases(mnemonic));
-      await hinkal.resetMerkle([this.getChainId()]);
+      // Legacy compatibility: 0.2.21 initUserKeysFromSeedPhrases used keccak256(utf8(joined seed phrase)).
+      if (typeof hinkal.initUserKeysWithPassword === 'function') {
+        const normalizedMnemonic = getSeedPhrases(mnemonic).join(' ');
+        const legacySeedHex = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(normalizedMnemonic));
+        await hinkal.initUserKeysWithPassword(legacySeedHex);
+      } else if (typeof hinkal.initUserKeys === 'function') {
+        await hinkal.initUserKeys();
+      }
+      await hinkal.resetMerkle();
       return hinkal;
     })();
 
@@ -111,7 +122,7 @@ export class HinkalManager {
 
   async getShieldSpender(params: { mnemonic: string; publicWallet: Signer }): Promise<string> {
     const hinkal = await this.getSessionHinkal(params.mnemonic, params.publicWallet);
-    const contract = hinkal.getContract(this.getChainId(), HINKAL_CONTRACT_TYPE);
+    const contract = hinkal.getContract(HINKAL_CONTRACT_TYPE, undefined, this.getChainId());
     const address = contract?.address;
     if (!address) {
       throw new Error('Could not resolve Hinkal shield contract address.');
@@ -178,8 +189,7 @@ export class HinkalManager {
     }
 
     const result = await hinkal.actionPrivateWallet(
-      this.getChainId(),
-      [token],
+      [params.token.address],
       [-params.amount],
       [false],
       ops,
@@ -197,9 +207,13 @@ export class HinkalManager {
     mnemonic: string;
     tokenAddress: string;
     publicWallet: Signer;
+    forceRefresh?: boolean;
   }): Promise<bigint> {
     const signerAddress = await params.publicWallet.getAddress();
     const tokenAddress = params.tokenAddress.toLowerCase();
+    if (params.forceRefresh) {
+      this.sessions.delete(this.getSessionKey(params.mnemonic, signerAddress));
+    }
     const readBalance = async (hinkal: HinkalLike): Promise<bigint> => {
       await assertRuntimeSignerAddress(hinkal, this.getChainId(), signerAddress);
       const privateKey = hinkal.userKeys?.getShieldedPrivateKey?.();
@@ -213,7 +227,7 @@ export class HinkalManager {
         privateKey,
         publicKey,
         signerAddress,
-        true,
+        Boolean(params.forceRefresh),
         true,
         false,
       );
@@ -300,8 +314,7 @@ export class HinkalManager {
     }
 
     const result = await hinkal.actionPrivateWallet(
-      this.getChainId(),
-      [token],
+      [params.token.address],
       [params.amount],
       [true],
       [op],
@@ -348,8 +361,7 @@ export class HinkalManager {
     }
 
     const result = await hinkal.actionPrivateWallet(
-      this.getChainId(),
-      [borrowToken],
+      [params.borrowToken.address],
       [params.amount],
       [true],
       [op],
@@ -399,8 +411,7 @@ export class HinkalManager {
     }
 
     const result = await hinkal.actionPrivateWallet(
-      this.getChainId(),
-      [debtToken],
+      [params.debtToken.address],
       [-params.amount],
       [false],
       ops,

@@ -43,3 +43,4 @@ Core flow:
 - `login-test` uses `VITE_LOGIN_TEST_MNEMONIC` when no mnemonic argument is provided.
 - Position IDs are retrieved with `supply-positions` after a successful supply.
 - `private-withdraw` needs the local withdraw auth note stored in browser localStorage.
+- `withdrawAuthSecret` is shown in CLI output after supply/borrow and after secret rotation in partial repay/withdraw. Treat it like a private key and avoid sharing logs/screenshots.

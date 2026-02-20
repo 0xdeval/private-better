@@ -33,6 +33,7 @@ Do not treat these as interchangeable
 - Checks private spendable balance
 - Pre-estimates Hinkal fee and enforces a reserve guard
 - Stores `withdrawAuthSecret` locally in session after position creation
+- Prints backup secret in CLI output after position creation (sensitive)
 
 ### Withdraw method
 
@@ -42,6 +43,7 @@ Do not treat these as interchangeable
 - Resolves `max` to exact on-chain position amount
 - Includes fallback retry with `amount - 1` for Aave rounding edge case
 - Rotates secret on partial withdraw; removes on full close
+- Prints rotated secret in CLI output after partial withdraw (sensitive)
 
 ### Borrow method
 
@@ -50,6 +52,7 @@ Do not treat these as interchangeable
 - Borrows with Aave variable rate mode (2)
 - Routes borrowed WETH to Emporium and credits private balance
 - Rotates secret after successful borrow
+- Prints rotated secret in CLI output after borrow (sensitive)
 
 ### Repay method
 
@@ -59,6 +62,7 @@ Do not treat these as interchangeable
 - Uses same per-position auth secret model
 - Pays Hinkal fee in USDC (same reserve guard policy)
 - Rotates secret after successful repay
+- Prints rotated secret in CLI output after repay (sensitive)
 
 ## 4. Fee model
 
@@ -83,6 +87,9 @@ User-visible lines are printed before submit:
 Browser session is encrypted in local storage via:
 
 - `src/privacy/privacySession.ts`
+- CLI output also includes `WithdrawAuth backup` lines by design today.
+- Anyone with the latest secret for a position can execute auth-protected private actions for that position.
+- Treat these secrets like private keys and keep logs/screenshots private.
 
 ## 6. Typical failure modes
 

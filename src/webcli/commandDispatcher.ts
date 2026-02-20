@@ -12,6 +12,7 @@ import {
 } from './commands/accountCommands';
 import {
   privateBorrowCommand,
+  positionAuthCommand,
   privateRepayCommand,
   privateSupplyCommand,
   privateWithdrawCommand,
@@ -91,14 +92,37 @@ export const executeCommand = async (runtime: WebCliRuntime, raw: string): Promi
       case 'supply-positions':
         await withOptionalSpinner(runtime, cmd, () => supplyPositionsCommand(runtime), 'fetching supplied positions...');
         return;
+      case 'position-auth':
+        await withOptionalSpinner(
+          runtime,
+          cmd,
+          () => positionAuthCommand(runtime, args[0], args[1]),
+          'reading/storing position auth secret...',
+        );
+        return;
       case 'private-withdraw':
-        await withOptionalSpinner(runtime, cmd, () => privateWithdrawCommand(runtime, args[0], args[1]), 'withdrawing your funds from AAVE...');
+        await withOptionalSpinner(
+          runtime,
+          cmd,
+          () => privateWithdrawCommand(runtime, args[0], args[1], args[2]),
+          'withdrawing your funds from AAVE...',
+        );
         return;
       case 'private-borrow':
-        await withOptionalSpinner(runtime, cmd, () => privateBorrowCommand(runtime, args[0], args[1]), 'privately borrowing WETH from AAVE...');
+        await withOptionalSpinner(
+          runtime,
+          cmd,
+          () => privateBorrowCommand(runtime, args[0], args[1], args[2]),
+          'privately borrowing WETH from AAVE...',
+        );
         return;
       case 'private-repay':
-        await withOptionalSpinner(runtime, cmd, () => privateRepayCommand(runtime, args[0], args[1]), 'repaying WETH to AAVE...');
+        await withOptionalSpinner(
+          runtime,
+          cmd,
+          () => privateRepayCommand(runtime, args[0], args[1], args[2]),
+          'repaying WETH to AAVE...',
+        );
         return;
       default:
         runtime.write(`Unknown command: ${cmd}. Type 'help' or 'get-started'`, 'err');

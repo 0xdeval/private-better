@@ -1,8 +1,97 @@
-import { BigNumber, Contract, ethers } from 'ethers';
+import { BigNumber, Contract, ethers, type Signer } from 'ethers';
 
 import { ADAPTER_ABI, ERC20_ABI } from '../abis';
 import { formatTokenAmount, parseTokenAmount } from '../amounts';
 import { WebCliRuntime } from '../runtime';
+
+const isBytes32Hex = (value: string): boolean => /^0x[0-9a-fA-F]{64}$/.test(value);
+
+const parsePositionAuthSecret = (value: string, label = 'auth secret'): string => {
+  if (!isBytes32Hex(value)) {
+    throw new Error(`Invalid ${label}. Expected 32-byte hex like 0xabc... (64 hex chars).`);
+  }
+  return ethers.utils.hexlify(value).toLowerCase();
+};
+
+const resolvePositionAuthSecret = (
+  positionSecrets: Record<string, string>,
+  positionId: bigint,
+  providedSecret: string | undefined,
+): { secret: string; usedProvided: boolean } => {
+  if (providedSecret != null) {
+    return {
+      secret: parsePositionAuthSecret(providedSecret, 'withdraw auth secret'),
+      usedProvided: true,
+    };
+  }
+
+  const stored = positionSecrets[positionId.toString()];
+  if (!stored) {
+    throw new Error(
+      `No local auth secret found for position ${positionId.toString()}. Use position-auth <positionId> <withdrawAuth> with your saved secret.`,
+    );
+  }
+  return { secret: stored, usedProvided: false };
+};
+
+type BalanceToken = {
+  address: string;
+  symbol: string;
+  decimals: number;
+};
+
+type BalanceRetryOptions = {
+  maxRefreshAttempts?: number;
+  retryDelayMs?: number;
+};
+
+const wait = async (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+
+const resolveRequiredPrivateBalance = async (params: {
+  runtime: WebCliRuntime;
+  mnemonic: string;
+  publicWallet: Signer;
+  token: BalanceToken;
+  required: bigint;
+  label: string;
+  options?: BalanceRetryOptions;
+}): Promise<bigint> => {
+  const maxRefreshAttempts = params.options?.maxRefreshAttempts ?? 2;
+  const retryDelayMs = params.options?.retryDelayMs ?? 1500;
+
+  let balance = await params.runtime.manager.getPrivateSpendableBalance({
+    mnemonic: params.mnemonic,
+    tokenAddress: params.token.address,
+    publicWallet: params.publicWallet,
+    forceRefresh: false,
+  });
+
+  if (balance >= params.required || maxRefreshAttempts <= 0) {
+    return balance;
+  }
+
+  params.runtime.write(`Balance sync (${params.label}): cached balance below required, refreshing...`, 'muted');
+
+  for (let attempt = 0; attempt < maxRefreshAttempts; attempt += 1) {
+    balance = await params.runtime.manager.getPrivateSpendableBalance({
+      mnemonic: params.mnemonic,
+      tokenAddress: params.token.address,
+      publicWallet: params.publicWallet,
+      forceRefresh: true,
+    });
+    if (balance >= params.required) {
+      return balance;
+    }
+    if (attempt < maxRefreshAttempts - 1) {
+      await wait(retryDelayMs);
+    }
+  }
+
+  return balance;
+};
 
 export const privateSupplyCommand = async (
   runtime: WebCliRuntime,
@@ -38,10 +127,13 @@ export const privateSupplyCommand = async (
     `private-supply preflight: publicBalance=${formatTokenAmount(publicBalance, supplyToken.decimals)} allowanceToHinkal=${formatTokenAmount(allowanceToSpender, supplyToken.decimals)}`,
   );
 
-  const privateSpendableBalance = await runtime.manager.getPrivateSpendableBalance({
+  let privateSpendableBalance = await resolveRequiredPrivateBalance({
+    runtime,
     mnemonic: session.mnemonic,
-    tokenAddress: supplyToken.address,
     publicWallet: signer,
+    token: supplyToken,
+    required: amount,
+    label: 'supply-amount',
   });
   const privateActionContext = await runtime.manager.getPrivateActionContext({
     mnemonic: session.mnemonic,
@@ -79,6 +171,14 @@ export const privateSupplyCommand = async (
       'muted',
     );
     runtime.debugFeeEstimate('supply-fee', estimatedFlatFee, reserve, requiredTotal);
+    privateSpendableBalance = await resolveRequiredPrivateBalance({
+      runtime,
+      mnemonic: session.mnemonic,
+      publicWallet: signer,
+      token: supplyToken,
+      required: requiredTotal,
+      label: 'supply-fee-reserve',
+    });
     if (privateSpendableBalance < requiredTotal) {
       throw new Error(
         `Insufficient private spendable balance for supply + fee reserve. Need ${formatTokenAmount(requiredTotal, supplyToken.decimals)}, available ${formatTokenAmount(privateSpendableBalance, supplyToken.decimals)}.`,
@@ -116,13 +216,22 @@ export const privateSupplyCommand = async (
   const afterIds = afterIdsRaw[0] as BigNumber[];
   const createdId = afterIds.find((id) => !beforeSet.has(id.toString())) ?? afterIds.at(-1);
   if (createdId != null) {
-    session.positionSecrets[createdId.toString()] = withdrawAuthSecret;
+    const positionId = createdId.toString();
+    session.positionSecrets[positionId] = withdrawAuthSecret;
     await runtime.saveActiveSession();
-    runtime.write(`Position created: ${createdId.toString()} (withdraw secret stored locally).`, 'ok');
+    runtime.write(`Position created: ${positionId} (withdraw secret stored locally).`, 'ok');
+    runtime.write(
+      `WithdrawAuth backup (SAVE SECURELY): positionId=${positionId} secret=${withdrawAuthSecret}`,
+      'ok',
+    );
     return;
   }
 
   runtime.write('Supply tx confirmed, but could not auto-detect new position id. Run supply-positions.', 'muted');
+  runtime.write(
+    `WithdrawAuth backup (SAVE SECURELY): secret=${withdrawAuthSecret}. After finding the position id, bind it with: position-auth <positionId> <withdrawAuth>.`,
+    'muted',
+  );
 };
 
 export const supplyPositionsCommand = async (runtime: WebCliRuntime) => {
@@ -160,9 +269,10 @@ export const privateWithdrawCommand = async (
   runtime: WebCliRuntime,
   positionIdText: string | undefined,
   amountText: string | undefined,
+  providedSecretText?: string,
 ) => {
   if (!positionIdText || !amountText) {
-    throw new Error('Usage: private-withdraw <positionId> <amount|max>');
+    throw new Error('Usage: private-withdraw <positionId> <amount|max> [withdrawAuth]');
   }
 
   const session = runtime.requireActiveSession();
@@ -174,11 +284,13 @@ export const privateWithdrawCommand = async (
   const supplyToken = runtime.getSupplyTokenConfig();
   const positionId = BigInt(positionIdText);
   const isMaxWithdraw = amountText.toLowerCase() === 'max';
-  const currentSecret = session.positionSecrets[positionId.toString()];
-  if (!currentSecret) {
-    throw new Error(
-      `No local withdraw secret found for position ${positionId.toString()}. Use supply-positions and ensure this browser created the position.`,
-    );
+  const { secret: currentSecret, usedProvided } = resolvePositionAuthSecret(
+    session.positionSecrets,
+    positionId,
+    providedSecretText?.trim(),
+  );
+  if (usedProvided) {
+    runtime.write('Using WithdrawAuth provided in command input.', 'muted');
   }
 
   const { provider, signerAddress } = await runtime.getSigner();
@@ -200,17 +312,10 @@ export const privateWithdrawCommand = async (
 
   const nextSecret = ethers.utils.hexlify(ethers.utils.randomBytes(32));
   const nextWithdrawAuthHash = ethers.utils.keccak256(nextSecret);
-  const [privateSpendableBalance, privateActionContext] = await Promise.all([
-    runtime.manager.getPrivateSpendableBalance({
-      mnemonic: session.mnemonic,
-      tokenAddress: supplyToken.address,
-      publicWallet: signer,
-    }),
-    runtime.manager.getPrivateActionContext({
-      mnemonic: session.mnemonic,
-      publicWallet: signer,
-    }),
-  ]);
+  const privateActionContext = await runtime.manager.getPrivateActionContext({
+    mnemonic: session.mnemonic,
+    publicWallet: signer,
+  });
   const withdrawOps = runtime.buildPrivateWithdrawOps({
     adapterAddress,
     emporiumAddress,
@@ -227,6 +332,14 @@ export const privateWithdrawCommand = async (
   });
   if (estimatedFlatFee != null) {
     const { reserve } = runtime.getBufferedFeeReserve(estimatedFlatFee);
+    const privateSpendableBalance = await resolveRequiredPrivateBalance({
+      runtime,
+      mnemonic: session.mnemonic,
+      publicWallet: signer,
+      token: supplyToken,
+      required: reserve,
+      label: 'withdraw-fee-reserve',
+    });
     runtime.write(
       `Fee estimate (withdraw): flatFee=${formatTokenAmount(estimatedFlatFee, supplyToken.decimals)} reserve=${formatTokenAmount(reserve, supplyToken.decimals)} requiredPrivateBalance=${formatTokenAmount(reserve, supplyToken.decimals)}`,
       'muted',
@@ -300,15 +413,20 @@ export const privateWithdrawCommand = async (
     `Position ${positionId.toString()} updated. Remaining amount=${formatTokenAmount(remainingAmount, supplyToken.decimals)}. Secret rotated.`,
     'ok',
   );
+  runtime.write(
+    `WithdrawAuth backup (SAVE SECURELY): positionId=${positionId.toString()} secret=${nextSecret}`,
+    'ok',
+  );
 };
 
 export const privateBorrowCommand = async (
   runtime: WebCliRuntime,
   positionIdText: string | undefined,
   amountText: string | undefined,
+  providedSecretText?: string,
 ) => {
   if (!positionIdText || !amountText) {
-    throw new Error('Usage: private-borrow <positionId> <amount>');
+    throw new Error('Usage: private-borrow <positionId> <amount> [withdrawAuth]');
   }
 
   const session = runtime.requireActiveSession();
@@ -321,11 +439,13 @@ export const privateBorrowCommand = async (
   const borrowToken = runtime.getBorrowWethTokenConfig();
   const positionId = BigInt(positionIdText);
   const amount = parseTokenAmount(amountText, borrowToken.decimals);
-  const currentSecret = session.positionSecrets[positionId.toString()];
-  if (!currentSecret) {
-    throw new Error(
-      `No local auth secret found for position ${positionId.toString()}. Use supply-positions and ensure this browser created the position.`,
-    );
+  const { secret: currentSecret, usedProvided } = resolvePositionAuthSecret(
+    session.positionSecrets,
+    positionId,
+    providedSecretText?.trim(),
+  );
+  if (usedProvided) {
+    runtime.write('Using WithdrawAuth provided in command input.', 'muted');
   }
 
   const { provider, signerAddress } = await runtime.getSigner();
@@ -348,17 +468,10 @@ export const privateBorrowCommand = async (
 
   const nextSecret = ethers.utils.hexlify(ethers.utils.randomBytes(32));
   const nextAuthHash = ethers.utils.keccak256(nextSecret);
-  const [privateUsdcBalance, privateActionContext] = await Promise.all([
-    runtime.manager.getPrivateSpendableBalance({
-      mnemonic: session.mnemonic,
-      tokenAddress: supplyToken.address,
-      publicWallet: signer,
-    }),
-    runtime.manager.getPrivateActionContext({
-      mnemonic: session.mnemonic,
-      publicWallet: signer,
-    }),
-  ]);
+  const privateActionContext = await runtime.manager.getPrivateActionContext({
+    mnemonic: session.mnemonic,
+    publicWallet: signer,
+  });
 
   const borrowOps = runtime.buildPrivateBorrowOps({
     adapterAddress,
@@ -377,6 +490,14 @@ export const privateBorrowCommand = async (
   });
   if (estimatedFlatFee != null) {
     const { reserve } = runtime.getBufferedFeeReserve(estimatedFlatFee);
+    const privateUsdcBalance = await resolveRequiredPrivateBalance({
+      runtime,
+      mnemonic: session.mnemonic,
+      publicWallet: signer,
+      token: supplyToken,
+      required: reserve,
+      label: 'borrow-fee-reserve',
+    });
     runtime.write(
       `Fee estimate (borrow): flatFee=${formatTokenAmount(estimatedFlatFee, supplyToken.decimals)} reserve=${formatTokenAmount(reserve, supplyToken.decimals)} requiredPrivateUSDC=${formatTokenAmount(reserve, supplyToken.decimals)}`,
       'muted',
@@ -410,15 +531,20 @@ export const privateBorrowCommand = async (
     `Position ${positionId.toString()} borrowed ${formatTokenAmount(amount, borrowToken.decimals)} ${borrowToken.symbol}. Secret rotated.`,
     'ok',
   );
+  runtime.write(
+    `WithdrawAuth backup (SAVE SECURELY): positionId=${positionId.toString()} secret=${nextSecret}`,
+    'ok',
+  );
 };
 
 export const privateRepayCommand = async (
   runtime: WebCliRuntime,
   positionIdText: string | undefined,
   amountText: string | undefined,
+  providedSecretText?: string,
 ) => {
   if (!positionIdText || !amountText) {
-    throw new Error('Usage: private-repay <positionId> <amount>');
+    throw new Error('Usage: private-repay <positionId> <amount> [withdrawAuth]');
   }
 
   const session = runtime.requireActiveSession();
@@ -431,11 +557,13 @@ export const privateRepayCommand = async (
   const borrowToken = runtime.getBorrowWethTokenConfig();
   const positionId = BigInt(positionIdText);
   const amount = parseTokenAmount(amountText, borrowToken.decimals);
-  const currentSecret = session.positionSecrets[positionId.toString()];
-  if (!currentSecret) {
-    throw new Error(
-      `No local auth secret found for position ${positionId.toString()}. Use supply-positions and ensure this browser created the position.`,
-    );
+  const { secret: currentSecret, usedProvided } = resolvePositionAuthSecret(
+    session.positionSecrets,
+    positionId,
+    providedSecretText?.trim(),
+  );
+  if (usedProvided) {
+    runtime.write('Using WithdrawAuth provided in command input.', 'muted');
   }
 
   const { provider, signerAddress } = await runtime.getSigner();
@@ -458,22 +586,18 @@ export const privateRepayCommand = async (
 
   const nextSecret = ethers.utils.hexlify(ethers.utils.randomBytes(32));
   const nextAuthHash = ethers.utils.keccak256(nextSecret);
-  const [privateWethBalance, privateUsdcBalance, privateActionContext] = await Promise.all([
-    runtime.manager.getPrivateSpendableBalance({
-      mnemonic: session.mnemonic,
-      tokenAddress: borrowToken.address,
-      publicWallet: signer,
-    }),
-    runtime.manager.getPrivateSpendableBalance({
-      mnemonic: session.mnemonic,
-      tokenAddress: supplyToken.address,
-      publicWallet: signer,
-    }),
-    runtime.manager.getPrivateActionContext({
-      mnemonic: session.mnemonic,
-      publicWallet: signer,
-    }),
-  ]);
+  const privateActionContext = await runtime.manager.getPrivateActionContext({
+    mnemonic: session.mnemonic,
+    publicWallet: signer,
+  });
+  const privateWethBalance = await resolveRequiredPrivateBalance({
+    runtime,
+    mnemonic: session.mnemonic,
+    publicWallet: signer,
+    token: borrowToken,
+    required: amount,
+    label: 'repay-amount',
+  });
 
   if (privateWethBalance < amount) {
     throw new Error(
@@ -497,6 +621,14 @@ export const privateRepayCommand = async (
   });
   if (estimatedFlatFee != null) {
     const { reserve } = runtime.getBufferedFeeReserve(estimatedFlatFee);
+    const privateUsdcBalance = await resolveRequiredPrivateBalance({
+      runtime,
+      mnemonic: session.mnemonic,
+      publicWallet: signer,
+      token: supplyToken,
+      required: reserve,
+      label: 'repay-fee-reserve',
+    });
     runtime.write(
       `Fee estimate (repay): flatFee=${formatTokenAmount(estimatedFlatFee, supplyToken.decimals)} reserve=${formatTokenAmount(reserve, supplyToken.decimals)} requiredPrivateUSDC=${formatTokenAmount(reserve, supplyToken.decimals)}`,
       'muted',
@@ -527,6 +659,45 @@ export const privateRepayCommand = async (
   await runtime.saveActiveSession();
   runtime.write(
     `Position ${positionId.toString()} repaid ${formatTokenAmount(amount, borrowToken.decimals)} ${borrowToken.symbol}. Secret rotated.`,
+    'ok',
+  );
+  runtime.write(
+    `WithdrawAuth backup (SAVE SECURELY): positionId=${positionId.toString()} secret=${nextSecret}`,
+    'ok',
+  );
+};
+
+export const positionAuthCommand = async (
+  runtime: WebCliRuntime,
+  positionIdText: string | undefined,
+  authSecretText: string | undefined,
+) => {
+  if (!positionIdText) {
+    throw new Error('Usage: position-auth <positionId> [withdrawAuth]');
+  }
+
+  const session = runtime.requireActiveSession();
+  const positionId = BigInt(positionIdText).toString();
+
+  if (!authSecretText) {
+    const existing = session.positionSecrets[positionId];
+    if (!existing) {
+      runtime.write(`No local WithdrawAuth stored for position ${positionId}.`, 'muted');
+      return;
+    }
+    runtime.write(
+      `WithdrawAuth backup (SAVE SECURELY): positionId=${positionId} secret=${existing}`,
+      'ok',
+    );
+    return;
+  }
+
+  const parsed = parsePositionAuthSecret(authSecretText.trim(), 'withdraw auth secret');
+  session.positionSecrets[positionId] = parsed;
+  await runtime.saveActiveSession();
+  runtime.write(`Stored WithdrawAuth for position ${positionId}.`, 'ok');
+  runtime.write(
+    `WithdrawAuth backup (SAVE SECURELY): positionId=${positionId} secret=${parsed}`,
     'ok',
   );
 };

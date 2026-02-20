@@ -22,7 +22,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@hinkal/common": "latest",
+    "@hinkal/common": "^0.2.22",
     "assert": "^2.1.0",
     "browserify-zlib": "^0.2.0",
     "buffer": "^6.0.3",

@@ -47,13 +47,14 @@ Here is a short recap:
 **Withdraw is private-destination by default (not public recipient)**
 
 ‼️ Warning:
-Currently the mechanism of `withdrawAuthNote` is used for the contract. The private withdrawAuthNote is generate after each `supply` and `borrow` (and during partial `repay` and `withdraw`) operation and save to your browser `localStorage`. Clearing site storage deletes it!
+`withdrawAuthSecret` is sensitive and is currently shown in CLI output after `private-supply`, `private-borrow`, and after secret rotation in partial `private-withdraw` / `private-repay`. It is also stored in encrypted browser local storage.
 
 So:
 
-- If you clear browser cache/local storage, local withdraw auth secrets are deleted
-- Without the correct withdraw auth secret, you cannot call `private-withdraw` for existing supplied positions
-- Until secret backup/export is shipped, treat browser/session data as required to recover supplied funds through WebCLI
+- Anyone who gets the latest secret for a position can execute auth-protected actions for that position (`private-withdraw`, `private-borrow`, `private-repay`) and may drain user funds.
+- If you clear browser cache/local storage, local withdraw auth secrets are deleted.
+- Without the correct withdraw auth secret, you cannot call `private-withdraw` for existing supplied positions.
+- Do not share terminal logs/screenshots, and clear terminal output after operations that print secrets.
 
 ## User flows
 
@@ -187,17 +188,18 @@ User-visible preflight lines show:
 
 ### Withdraw Auth Note
 
-Today, withdraw auth secrets are stored in the local browser session for created positions
-A future UX update will let users explicitly save/export withdraw auth so they can complete withdraws later across sessions/devices
+Today, withdraw auth secrets are stored in the local browser session for created positions.
+The same secrets are printed in terminal output after supply/borrow/repay/withdraw rotation to help backup.
+A future UX update will replace this with safer secret management and explicit secure export/import.
 
 ‼️ Warning:
-Currently the mechanism of withdrawAtuhNote is used for the contract. The private withdrawAuthNote is generate after each `supply` and `borrow` (and during partial `repay` and `withdraw`) operation and save to your browser `localStorage`. Clearing site storage deletes it!
+The latest secret is enough to control a position.
 
 So:
 
-- If you clear browser cache/local storage, local withdraw auth secrets are deleted
-- Without the correct withdraw auth secret, you cannot call `private-withdraw` for existing supplied positions
-- Until secret backup/export is shipped, treat browser/session data as required to recover supplied funds through WebCLI
+- Treat `withdrawAuthSecret` like a private key.
+- Do not store it in chat logs, screenshots, cloud notes, or shared terminals.
+- Rotate and store only the latest secret for each position.
 
 ## Other files
 

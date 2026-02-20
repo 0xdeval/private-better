@@ -16,9 +16,16 @@ export const helpCommand = (runtime: WebCliRuntime) => {
   runtime.write('private-supply <amount> e.g. private-supply 1.0');
   runtime.write('supply-positions');
   runtime.write(
-    'private-withdraw <positionId> <amount|max> e.g. private-withdraw 1 max',
+    'position-auth <positionId> [withdrawAuth] -> show or set auth secret backup',
   );
-  runtime.write('private-borrow <positionId> <amount> e.g. private-borrow 1 0.01');
-  runtime.write('private-repay <positionId> <amount> e.g. private-repay 1 0.005');
+  runtime.write(
+    'private-withdraw <positionId> <amount|max> [withdrawAuth] e.g. private-withdraw 1 max',
+  );
+  runtime.write(
+    'private-borrow <positionId> <amount> [withdrawAuth] e.g. private-borrow 1 0.01',
+  );
+  runtime.write(
+    'private-repay <positionId> <amount> [withdrawAuth] e.g. private-repay 1 0.005',
+  );
   runtime.write('', 'muted');
 };
