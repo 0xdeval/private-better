@@ -1,0 +1,37 @@
+---
+description: Contracts context for adapter/factory/vault architecture and critical invariants.
+globs: *
+---
+
+# CONTRACTS: MAIN CONCEPTS
+
+1. `PrivateSupplyAdapter` is the privacy callback entrypoint.
+2. `VaultFactory` manages one `UserVault` per `zkOwnerHash`.
+3. `UserVault` is the isolated Aave account that supplies/borrows/repays/withdraws.
+4. Positions are tracked in adapter storage by `positionId`.
+5. Position identity is private (`zkOwnerHash`), not EOA.
+
+# CRITICAL SECURITY NOTICES
+
+1. `onPrivateDeposit`, `withdrawToRecipient`, `borrowToRecipient`, `repayFromPrivate` must remain `onlyPrivacyExecutor`.
+2. `privacyExecutor` should match configured chain Emporium.
+3. Do not remove `borrowTokenAllowedMap` checks for borrow/repay token paths.
+4. Do not remove per-position auth validation (`_validateAuth`).
+5. Do not bypass zero-address and zero-amount checks.
+
+# POSITION + AUTH INVARIANTS
+
+1. Supply requires non-zero `withdrawAuthHash`.
+2. Withdraw requires matching secret and updates hash to `nextWithdrawAuthHash`.
+3. Borrow/repay require matching auth secret and rotate to `nextAuthHash`.
+4. For full withdraw (`position.amount == 0`), hash may become zero and local secret is removed client-side.
+5. Keep emitted event fields compatible with current indexing assumptions.
+
+# CHANGE SAFETY CHECKS
+
+1. Preserve `zkOwnerHash -> vault` isolation behavior.
+2. Preserve adapter/factory wiring constraints.
+3. After contract-affecting changes, run:
+4. `bun run typecheck`
+5. `bun run build:web`
+6. Relevant smoke scripts under `scripts/smoke-tests/`.

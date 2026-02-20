@@ -1,46 +1,43 @@
 ---
-description: Current canonical context for Private Better (Hinkal + private Aave WebCLI).
+description: Canonical high-level context for Hush (Hinkal + private Aave WebCLI).
 globs: *
 ---
 
 # PROJECT CONTEXT
 
-Private Better currently runs a Hinkal-first private DeFi flow on Arbitrum.
-The active product surface is the browser WebCLI (`src/webcli/app.ts`).
+Hush is a browser WebCLI for private DeFi actions on top of Aave.
+The active runtime is WebCLI only (`src/webcli/app.ts`); there is no server CLI.
 
 # ACTIVE ARCHITECTURE (STRICT)
 
-1. User signs with injected wallet (Rabby/MetaMask/Coinbase).
-2. Hinkal session is initialized from mnemonic and wallet signer.
-3. Public USDC can be shielded/unshielded via Hinkal contract.
-4. Private supply uses Emporium ops:
-   - transfer USDC from Emporium to adapter,
-   - call adapter `onPrivateDeposit(...)`.
-5. Adapter supplies into per-owner vault/Aave position.
-6. Private withdraw executes adapter `withdrawToRecipient(...)` and returns funds to private balance.
+1. User connects injected wallet and signs session message.
+2. WebCLI initializes Hinkal session from mnemonic + signer.
+3. Public token flow: `approve` -> `shield` -> private spendable balance.
+4. Private Aave flow: `private-supply`, `private-withdraw`, `private-borrow`, `private-repay`.
+5. Adapter/factory/vault contracts isolate positions by `zkOwnerHash`.
+6. Private outputs route through Emporium so funds return to private balance.
 
 # TECH STACK
 
-- **Frontend:** TypeScript + Vite WebCLI
-- **Package manager:** bun v1.2.17+
-- **Smart Contracts:** Solidity ^0.8.20 (Foundry)
-- **Web3:** Ethers.js v5.7.2
-- **Privacy SDK:** `@hinkal/common`
-- **Yield Protocol:** Aave via custom adapter/vault contracts
-- **Network:** Arbitrum One (chainId 42161)
+1. Frontend: TypeScript + Vite
+2. Package manager: Bun
+3. Contracts: Solidity + Foundry
+4. Web3: Ethers v5
+5. Privacy SDK: `@hinkal/common`
+6. Network target: Arbitrum One (`42161`)
 
-# CODING RULES
+# COMMAND SURFACE (CURRENT)
 
-1. **MVP First:** Prefer simple, verifiable happy-path implementations.
-2. **Privacy First:** Keep supply/withdraw identity private via Hinkal action flow.
-3. **Isolation First:** Preserve one-vault-per-`zkOwnerHash`.
-4. **No Hallucinations:** Verify method signatures from installed SDK/contracts.
-5. **Do Not Edit `node_modules`:** Fix via app code or config only.
+1. `help`, `clear`
+2. `login`, `login-test`, `import`
+3. `approve`, `shield`, `unshield`, `unshield-weth`, `private-balance`
+4. `private-supply`, `supply-positions`, `private-withdraw`
+5. `private-borrow`, `private-repay`
 
-# OPERATIONAL NOTES
+# NON-NEGOTIABLE GUARDRAILS
 
-1. `private-withdraw` is private-destination by default (not public recipient).
-2. Position secrets are stored locally and rotated on partial withdraw.
-3. Hinkal fees are runtime-estimated; keep private USDC reserve.
-4. Fee reserve guard is implemented in WebCLI preflight for supply/withdraw.
-5. Product focus is private supply; private borrow is planned next.
+1. Keep private destination semantics for `private-withdraw` (recipient is Emporium).
+2. Preserve auth secret lifecycle for positions (rotate after borrow/repay/partial-withdraw, remove on close).
+3. Preserve fee reserve preflight checks for private Aave actions.
+4. Preserve one-vault-per-`zkOwnerHash` behavior in contracts.
+5. Do not re-introduce legacy Railgun flows as active behavior.

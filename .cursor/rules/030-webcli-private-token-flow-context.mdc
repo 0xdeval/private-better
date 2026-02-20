@@ -1,0 +1,25 @@
+---
+description: WebCLI rules for approve/shield/unshield/private-balance token flows.
+globs: *
+---
+
+# PRIVATE TOKEN FLOW
+
+1. `approve <amount>` approves public token spend for Hinkal shield spender.
+2. `shield <amount>` moves public USDC to private spendable balance.
+3. `unshield <amount> [recipient]` moves private USDC back to public address.
+4. `unshield-weth <amount> [recipient]` moves private WETH back to public address.
+5. `private-balance [usdc|weth]` reads private spendable balance.
+
+# CRITICAL NOTICES
+
+1. Preserve token decimal-aware parsing/formatting.
+2. Preserve signer/session checks before token operations.
+3. Preserve explicit usage errors on missing/invalid args.
+4. Keep recipient default behavior: connected EOA when recipient is omitted.
+
+# TROUBLESHOOTING PATTERNS
+
+1. Insufficient public allowance/balance impacts approve/shield path.
+2. Insufficient private spendable balance impacts unshield path.
+3. Wrong network causes failures before token actions.

@@ -1,0 +1,31 @@
+---
+description: WebCLI session, wallet binding, and identity model rules.
+globs: *
+---
+
+# WEBCLI SESSION MODEL
+
+1. Session starts from `login`, `login-test`, or `import`.
+2. Session payload is encrypted in browser storage (`src/privacy/privacySession.ts`).
+3. Session key derives from signed message + chain + EOA.
+4. Session is chain-specific and signer-specific.
+
+# IDENTITY MODEL (DO NOT CONFUSE)
+
+1. EOA signer: pays gas and signs wallet prompts.
+2. Private address: derived from mnemonic; source for `zkOwnerHash`.
+3. Hinkal sub-account: used for private action signing.
+4. These identities can differ and must not be merged implicitly.
+
+# CRITICAL NOTICES
+
+1. Keep `assertSessionEoa(...)` checks before sensitive actions.
+2. Keep `ensureTargetNetwork()` checks (Arbitrum target).
+3. Keep `login-test` optional env support (`VITE_LOGIN_TEST_MNEMONIC`).
+4. Changing the signed session message invalidates previously stored sessions.
+
+# UX/ERROR EXPECTATIONS
+
+1. Errors must be explicit and actionable.
+2. If no local secret/session exists, instruct user which command to run next.
+3. Do not silently recover from signer mismatch.

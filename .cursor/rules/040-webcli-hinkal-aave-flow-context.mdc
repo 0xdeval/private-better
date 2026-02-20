@@ -1,0 +1,38 @@
+---
+description: WebCLI rules for private Aave actions through Hinkal and adapter/vault contracts.
+globs: *
+---
+
+# HINKAL <> AAVE COMMANDS
+
+1. `private-supply <amount>`
+2. `supply-positions`
+3. `private-withdraw <positionId> <amount|max>`
+4. `private-borrow <positionId> <amount>`
+5. `private-repay <positionId> <amount>`
+
+# CRITICAL FLOW INVARIANTS
+
+1. Validate adapter/Emporium/token config before private actions.
+2. Use Emporium ops builders from runtime/hinkal helpers.
+3. `private-withdraw` recipient must remain Emporium for private credit return.
+4. `private-withdraw max` fallback for Aave rounding edge case must remain.
+5. Keep local position secret lifecycle:
+6. Store after supply
+7. Rotate after borrow/repay/partial-withdraw
+8. Remove after full close
+
+# FEE RESERVE GUARD (REQUIRED)
+
+1. Estimate Hinkal `flatFee` before private actions.
+2. Compute reserve with configured buffer.
+3. Fail early if private USDC cannot cover required reserve.
+4. Keep user-visible fee preflight output lines.
+
+# CHANGE SAFETY
+
+1. Do not alter command semantics for existing users.
+2. Keep strict input validation for `positionId` and `amount`.
+3. Validate with:
+4. `bun run typecheck`
+5. `bun run build:web`
