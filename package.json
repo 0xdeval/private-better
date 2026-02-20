@@ -4,6 +4,9 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "dev": "bun run dev:web",
+    "build": "bun run build:web",
+    "preview": "bun run preview:web",
     "dev:web": "bunx --bun vite --force --port 3017 --strictPort",
     "build:web": "bunx --bun vite build",
     "preview:web": "bunx --bun vite preview --port 3017",

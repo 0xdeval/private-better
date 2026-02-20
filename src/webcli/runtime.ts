@@ -50,10 +50,19 @@ const env = (import.meta as ImportMeta & { env?: Record<string, string | undefin
 export class WebCliRuntime {
   readonly manager = new HinkalManager();
   private static bannerFontLoaded = false;
+  private static readonly spinnerFrames = ['|', '/', '-', '\\'];
 
   private privacySession: ActivePrivacySession | null = null;
   private legacyStoragePurged = false;
   private terminalEl: HTMLElement;
+  private spinnerState:
+    | {
+        lineEl: HTMLDivElement;
+        intervalId: number;
+        frameIndex: number;
+        label: string;
+      }
+    | null = null;
 
   constructor(terminalEl: HTMLElement) {
     this.terminalEl = terminalEl;
@@ -65,13 +74,59 @@ export class WebCliRuntime {
     if (type === 'muted') line.className = 'line-muted';
     if (type === 'ok') line.className = 'line-ok';
     if (type === 'err') line.className = 'line-err';
-    this.terminalEl.appendChild(line);
+    if (this.spinnerState?.lineEl.parentElement === this.terminalEl) {
+      this.terminalEl.insertBefore(line, this.spinnerState.lineEl);
+    } else {
+      this.terminalEl.appendChild(line);
+    }
     this.terminalEl.scrollTop = this.terminalEl.scrollHeight;
   }
 
   clear = () => {
+    this.stopSpinner();
     this.terminalEl.innerHTML = '';
   };
+
+  private renderSpinner() {
+    if (!this.spinnerState) return;
+    const frame = WebCliRuntime.spinnerFrames[this.spinnerState.frameIndex];
+    this.spinnerState.lineEl.textContent = `${frame} ${this.spinnerState.label}`;
+    this.spinnerState.frameIndex =
+      (this.spinnerState.frameIndex + 1) % WebCliRuntime.spinnerFrames.length;
+    this.terminalEl.scrollTop = this.terminalEl.scrollHeight;
+  }
+
+  private startSpinner(label: string) {
+    this.stopSpinner();
+
+    const lineEl = document.createElement('div');
+    lineEl.className = 'line-muted';
+    this.terminalEl.appendChild(lineEl);
+
+    this.spinnerState = {
+      lineEl,
+      intervalId: window.setInterval(() => this.renderSpinner(), 100),
+      frameIndex: 0,
+      label,
+    };
+    this.renderSpinner();
+  }
+
+  private stopSpinner() {
+    if (!this.spinnerState) return;
+    window.clearInterval(this.spinnerState.intervalId);
+    this.spinnerState.lineEl.remove();
+    this.spinnerState = null;
+  }
+
+  async withSpinner<T>(label: string, task: () => Promise<T>): Promise<T> {
+    this.startSpinner(label);
+    try {
+      return await task();
+    } finally {
+      this.stopSpinner();
+    }
+  }
 
   private ensureBannerFont() {
     if (WebCliRuntime.bannerFontLoaded) return;
