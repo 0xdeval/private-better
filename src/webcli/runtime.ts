@@ -1,4 +1,6 @@
 import { Contract, ethers } from 'ethers';
+import figlet from 'figlet';
+import slantFont from 'figlet/fonts/Slant';
 import {
   ExternalActionId,
   convertEmporiumOpToCallInfo,
@@ -47,6 +49,7 @@ const env = (import.meta as ImportMeta & { env?: Record<string, string | undefin
 
 export class WebCliRuntime {
   readonly manager = new HinkalManager();
+  private static bannerFontLoaded = false;
 
   private privacySession: ActivePrivacySession | null = null;
   private legacyStoragePurged = false;
@@ -70,23 +73,32 @@ export class WebCliRuntime {
     this.terminalEl.innerHTML = '';
   };
 
+  private ensureBannerFont() {
+    if (WebCliRuntime.bannerFontLoaded) return;
+    figlet.parseFont('Slant', slantFont);
+    WebCliRuntime.bannerFontLoaded = true;
+  }
+
+  private printBanner() {
+    try {
+      this.ensureBannerFont();
+      const banner = figlet.textSync('Hush', {
+        font: 'Slant',
+        horizontalLayout: 'full',
+      });
+      for (const line of banner.split('\n')) {
+        this.write(line, 'ok');
+      }
+    } catch {
+      this.write('Hush', 'ok');
+    }
+  }
+
   printStartup() {
-    this.write('Private Better Web CLI ready. Type `help`.', 'ok');
-    this.write(`Network: ${PRIVATE_NETWORK}`, 'muted');
-    this.write('Quick start:', 'muted');
-    this.write('1) login -> login to private wallet', 'muted');
-    this.write('2) approve 1 -> approve token to Hinkal shield contract', 'muted');
-    this.write('3) shield 1 -> shield token to private balance', 'muted');
-    this.write('4) unshield 1 -> unshield token to public wallet', 'muted');
-    this.write('5) private-balance [usdc|weth] -> show spendable private token balance', 'muted');
-    this.write('6) private-supply 1 -> create private supply position on Aave', 'muted');
-    this.write(
-      '7) private-withdraw <positionId> <amount|max> -> withdraw from Aave position to private balance',
-      'muted',
-    );
-    this.write('8) private-borrow <positionId> <amount> -> borrow WETH to private balance', 'muted');
-    this.write('9) private-repay <positionId> <amount> -> repay WETH debt from private balance', 'muted');
-    this.write('10) unshield-weth <amount> [recipient] -> unshield private WETH', 'muted');
+    this.printBanner();
+    this.write(`Connected network: ${PRIVATE_NETWORK}`, 'ok');
+    this.write('Hush Web CLI ready. Type `help` or `get-started` to get started', 'ok');
+
   }
 
   isDebugEnabled(): boolean {
@@ -445,7 +457,7 @@ export class WebCliRuntime {
     const signer = provider.getSigner(signerAddress);
     const network = await provider.getNetwork();
     const chainId = network.chainId;
-    const message = `Private Better Privacy Session v1\nChain:${chainId}\nAddress:${signerAddress.toLowerCase()}`;
+    const message = `Hush Privacy Session v1\nChain:${chainId}\nAddress:${signerAddress.toLowerCase()}`;
     const signature = await signer.signMessage(message);
     return { chainId: BigInt(chainId), sessionKeyHex: ethers.utils.keccak256(signature) };
   }

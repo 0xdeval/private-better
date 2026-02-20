@@ -4,6 +4,7 @@ import {
   approveCommand,
   importCommand,
   loginCommand,
+  loginTestCommand,
   privateBalanceCommand,
   shieldCommand,
   unshieldWethCommand,
@@ -16,6 +17,7 @@ import {
   privateWithdrawCommand,
   supplyPositionsCommand,
 } from './commands/positionCommands';
+import { getStartedForJudgesCommand } from './commands/getStartedForJudgesCommand';
 
 export const executeCommand = async (runtime: WebCliRuntime, raw: string): Promise<void> => {
   const [cmd, ...args] = raw.split(/\s+/);
@@ -25,11 +27,17 @@ export const executeCommand = async (runtime: WebCliRuntime, raw: string): Promi
       case 'help':
         helpCommand(runtime);
         return;
+      case 'get-started':
+        getStartedForJudgesCommand(runtime);
+        return;
       case 'clear':
         runtime.clear();
         return;
       case 'login':
         await loginCommand(runtime);
+        return;
+      case 'login-test':
+        await loginTestCommand(runtime, args.join(' '));
         return;
       case 'import':
         await importCommand(runtime, args.join(' '));
@@ -65,7 +73,7 @@ export const executeCommand = async (runtime: WebCliRuntime, raw: string): Promi
         await privateRepayCommand(runtime, args[0], args[1]);
         return;
       default:
-        runtime.write(`Unknown command: ${cmd}. Type help.`, 'err');
+        runtime.write(`Unknown command: ${cmd}. Type 'help' or 'get-started'`, 'err');
     }
   } catch (error) {
     runtime.write(`Error: ${runtime.formatError(error)}`, 'err');

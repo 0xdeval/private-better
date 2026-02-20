@@ -3,8 +3,10 @@ import { WebCliRuntime } from '../runtime';
 export const helpCommand = (runtime: WebCliRuntime) => {
   runtime.write('Commands:', 'muted');
   runtime.write('help');
+  runtime.write('get-started');
   runtime.write('clear');
   runtime.write('login');
+  runtime.write('login-test [mnemonic] -> uses VITE_LOGIN_TEST_MNEMONIC when arg is omitted');
   runtime.write('import <mnemonic>');
   runtime.write('approve <amount> e.g. approve 1.5');
   runtime.write('shield <amount> e.g. shield 1.5');
@@ -18,4 +20,5 @@ export const helpCommand = (runtime: WebCliRuntime) => {
   );
   runtime.write('private-borrow <positionId> <amount> e.g. private-borrow 1 0.01');
   runtime.write('private-repay <positionId> <amount> e.g. private-repay 1 0.005');
+  runtime.write('', 'muted');
 };

@@ -1,4 +1,4 @@
-# Private Better Agent Notes
+# Hush Agent Notes
 
 This file is the canonical handoff context for future agents working on this repo.
 
@@ -78,17 +78,18 @@ Railgun phase documents are historical context only.
 1. `help`
 2. `clear`
 3. `login`
-4. `import <mnemonic>`
-5. `approve <amount>`
-6. `shield <amount>`
-7. `unshield <amount> [recipient]`
-8. `unshield-weth <amount> [recipient]`
-9. `private-balance [usdc|weth]`
-10. `private-supply <amount>`
-11. `supply-positions`
-12. `private-borrow <positionId> <amount>`
-13. `private-repay <positionId> <amount>`
-14. `private-withdraw <positionId> <amount|max>`
+4. `login-test [mnemonic]`
+5. `import <mnemonic>`
+6. `approve <amount>`
+7. `shield <amount>`
+8. `unshield <amount> [recipient]`
+9. `unshield-weth <amount> [recipient]`
+10. `private-balance [usdc|weth]`
+11. `private-supply <amount>`
+12. `supply-positions`
+13. `private-borrow <positionId> <amount>`
+14. `private-repay <positionId> <amount>`
+15. `private-withdraw <positionId> <amount|max>`
 
 ## 4. Critical Behavioral Invariants
 
@@ -128,6 +129,7 @@ WebCLI:
 6. `VITE_PRIVATE_SUPPLY_ADAPTER`
 7. `VITE_PRIVATE_FEE_BUFFER_BPS` (optional)
 8. `VITE_PRIVATE_DEBUG` (optional)
+9. `VITE_LOGIN_TEST_MNEMONIC` (optional)
 
 Contracts/scripts:
 

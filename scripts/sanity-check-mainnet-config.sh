@@ -89,7 +89,7 @@ ADAPTER_FACTORY="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "vaultFactory()(address
 ADAPTER_EXECUTOR="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "privacyExecutor()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_BORROW_ALLOWED="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "isBorrowTokenAllowed(address)(bool)" "${BORROW_TOKEN}" --rpc-url "${RPC_URL}")"
 
-echo "Private Better Mainnet Sanity Check"
+echo "Hush Mainnet Sanity Check"
 echo "RPC:                 ${RPC_URL}"
 echo "Chain ID:            ${CHAIN_ID}"
 echo "Adapter:             ${PRIVATE_SUPPLY_ADAPTER}"

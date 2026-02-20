@@ -1,22 +1,24 @@
 # Overview
 
-Private Better brings private DeFi UX to Aave: users can supply USDC privately as collateral, borrow WETH privately, and manage repay/withdraw flows without exposing strategy identity.
+Hush brings private DeFi UX to Aave: users can supply USDC privately as collateral, borrow WETH privately, and manage repay/withdraw flows without exposing strategy identity.
 
-**The core privacy infrastructure that is used under the hood is provided by the [Hinkal protocol](https://hinkal.pro/)**
+**The core privacy infrastructure that is used under the hood is provided by the [Hinkal protocol](https://hinkal.pro/). More information about the integration ["Hinkal integration" page](docs/hinkal-integration.md)**
 
-****Supply mechanism:****
+\***\*Supply mechanism:\*\***
 ![value-flow](docs/supply-flow.png)
 
-****Borrow mechanism:****
+\***\*Borrow mechanism:\*\***
 ![value-flow](docs/borrow-flow.png)
+
+> [Evaluation guides](#user-flows)
 
 ## How does it work?
 
-To get the full how the product works, you can refer to the [sequence diagram](https://github.com/0xdeval/private-better/blob/main/docs/sequence-diagram.png)
+To get the full how the product works, you can refer to the [sequence diagram](docs/sequence-diagram.png)
 
 Here is a short recap:
 
-1. Login/import private session (`login` / `import`)
+1. Login/import private session (`login` / `login-test` / `import`)
 2. `approve 1` to approve 1 USDC (**better min 1 USDC for a smoother experience**)
 3. `shield 1` to add 1 USDC to a private wallet (**better min 1 USDC for a smoother experience**)
 4. `unshield 1` unshield and withdraw 1 USDC to a connected public wallet
@@ -29,7 +31,7 @@ Here is a short recap:
 **Withdraw is private-destination by default (not public recipient)**
 
 ‼️ Warning:
-Currently the mechanism of withdrawAtuhNote is used for the contract. The private withdrawAuthNote is generate after each `supply` and `borrow` (and during partial `repay` and `withdraw`) operation and save to your browser `localStorage`. Clearing site storage deletes it!
+Currently the mechanism of `withdrawAuthNote` is used for the contract. The private withdrawAuthNote is generate after each `supply` and `borrow` (and during partial `repay` and `withdraw`) operation and save to your browser `localStorage`. Clearing site storage deletes it!
 
 So:
 
@@ -37,18 +39,17 @@ So:
 - Without the correct withdraw auth secret, you cannot call `private-withdraw` for existing supplied positions
 - Until secret backup/export is shipped, treat browser/session data as required to recover supplied funds through WebCLI
 
-## Hinkal protocol integration
-
-Get more about how the Hinkal protocol integration works on the ["Hinkal integration" page](https://github.com/0xdeval/private-better/blob/main/docs/hinkal-integration.md)
-
 ## User flows
 
-Get more about user flows on the ["User flows" page](https://github.com/0xdeval/private-better/blob/main/docs/user-flows.md)
+Get more about user flows on the ["User flows" page](docs/user-flows.md)
 
-Judge-oriented Mermaid docs:
+Evaluation docs:
 
-- [Borrow/Repay schema (Mermaid)](docs/judges-borrow-repay-schema.md)
-- [Supply/Borrow/Repay sequence diagram (Mermaid)](docs/judges-sequence-borrow-repay.md)
+- [Evaluation guide](docs/evaluation-guide.md)
+- [Supply flow schema](docs/supply-flow.png)
+- [Borrow flow schema](docs/borrow-flow.png)
+- [Repay flow schema](docs/debt-repay-flow.png)
+- [Sequence diagram](docs/sequence-diagram.png)
 
 ### All WebCLI commands
 
@@ -57,6 +58,7 @@ Judge-oriented Mermaid docs:
 | `help`             | none                           | Show available commands                                 | `help`                               |
 | `clear`            | none                           | Clear terminal output                                   | `clear`                              |
 | `login`            | none                           | Create/load encrypted local private session             | `login`                              |
+| `login-test`       | `[mnemonic]`                   | Load test private session from arg or `.env` mnemonic   | `login-test`                         |
 | `import`           | `<mnemonic>`                   | Import private session from mnemonic                    | `import word1 word2 ...`             |
 | `approve`          | `<amount>`                     | Approve token spend for Hinkal shield flow              | `approve 1.5`                        |
 | `shield`           | `<amount>`                     | Move public token balance to private balance            | `shield 1.5`                         |
@@ -131,6 +133,7 @@ bash scripts/smoke-test-repay-supply-adapter.sh
 | `VITE_PRIVATE_SUPPLY_ADAPTER` | Yes      | Deployed `PrivateSupplyAdapter` contract address           | `0x...`                                      |
 | `VITE_PRIVATE_FEE_BUFFER_BPS` | No       | Extra fee buffer (basis points) for private actions        | `2000` (20%)                                 |
 | `VITE_PRIVATE_DEBUG`          | No       | Enable debug logs (`1` or `0`)                             | `0`                                          |
+| `VITE_LOGIN_TEST_MNEMONIC`    | No       | Optional mnemonic used by `login-test`                     | `"word1 word2 ..."`                          |
 
 ### Contracts / scripts (`.env`)
 

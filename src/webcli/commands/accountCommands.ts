@@ -5,6 +5,29 @@ import { ERC20_ABI } from '../abis';
 import { formatTokenAmount, parseTokenAmount } from '../amounts';
 import { WebCliRuntime } from '../runtime';
 
+const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+const LOGIN_TEST_MNEMONIC_KEY = 'VITE_LOGIN_TEST_MNEMONIC';
+
+const activateSessionFromMnemonic = async (
+  runtime: WebCliRuntime,
+  mnemonic: string,
+  chainId: bigint,
+  signerAddress: string,
+  sessionKeyHex: string,
+) => {
+  const privateAddress = runtime.manager.derivePrivateAddress(mnemonic);
+  runtime.setActiveSession({
+    privateAddress,
+    mnemonic,
+    positionSecrets: {},
+    sessionKeyHex,
+    eoaAddress: signerAddress,
+    chainId,
+  });
+  await runtime.saveActiveSession();
+  return privateAddress;
+};
+
 export const loginCommand = async (runtime: WebCliRuntime) => {
   await runtime.ensureTargetNetwork();
   const { provider, signerAddress } = await runtime.getSigner();
@@ -31,16 +54,13 @@ export const loginCommand = async (runtime: WebCliRuntime) => {
     throw new Error('Could not generate mnemonic.');
   }
 
-  const privateAddress = runtime.manager.derivePrivateAddress(mnemonic);
-  runtime.setActiveSession({
-    privateAddress,
+  const privateAddress = await activateSessionFromMnemonic(
+    runtime,
     mnemonic,
-    positionSecrets: {},
-    sessionKeyHex,
-    eoaAddress: signerAddress,
     chainId,
-  });
-  await runtime.saveActiveSession();
+    signerAddress,
+    sessionKeyHex,
+  );
   runtime.write(`Private account created: ${privateAddress}`, 'ok');
   runtime.write(`Backup mnemonic now (sensitive): ${mnemonic}`, 'muted');
 };
@@ -55,17 +75,36 @@ export const importCommand = async (runtime: WebCliRuntime, mnemonic: string) =>
   const { chainId, sessionKeyHex } = await runtime.deriveSessionKey(provider, signerAddress);
   await runtime.ensurePrivacyInitialized();
 
-  const privateAddress = runtime.manager.derivePrivateAddress(mnemonic);
-  runtime.setActiveSession({
-    privateAddress,
+  const privateAddress = await activateSessionFromMnemonic(
+    runtime,
     mnemonic,
-    positionSecrets: {},
-    sessionKeyHex,
-    eoaAddress: signerAddress,
     chainId,
-  });
-  await runtime.saveActiveSession();
+    signerAddress,
+    sessionKeyHex,
+  );
   runtime.write(`Private account imported: ${privateAddress}`, 'ok');
+};
+
+export const loginTestCommand = async (runtime: WebCliRuntime, mnemonicOverride: string | undefined) => {
+  const rawMnemonic = mnemonicOverride?.trim() || env?.[LOGIN_TEST_MNEMONIC_KEY]?.trim();
+  if (!rawMnemonic) {
+    throw new Error(`Usage: login-test [mnemonic]. Or set ${LOGIN_TEST_MNEMONIC_KEY} in .env`);
+  }
+
+  await runtime.ensureTargetNetwork();
+  const { provider, signerAddress } = await runtime.getSigner();
+  runtime.write('Please sign the session message in your wallet...', 'muted');
+  const { chainId, sessionKeyHex } = await runtime.deriveSessionKey(provider, signerAddress);
+  await runtime.ensurePrivacyInitialized();
+
+  const privateAddress = await activateSessionFromMnemonic(
+    runtime,
+    rawMnemonic,
+    chainId,
+    signerAddress,
+    sessionKeyHex,
+  );
+  runtime.write(`Test private account loaded: ${privateAddress}`, 'ok');
 };
 
 export const approveCommand = async (runtime: WebCliRuntime, amountText: string | undefined) => {

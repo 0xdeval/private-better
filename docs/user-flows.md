@@ -10,6 +10,18 @@ Here are scenarios how the product works on the UI and contract side for private
   - successful borrow/repay rotates the hash.
 - Borrow/repay fee reserve checks are enforced in private USDC by WebCLI before submission.
 
+### Evaluation walkthrough
+
+Use this command sequence for a quick end-to-end product review.
+
+1. Optional setup in `.env`: set `VITE_LOGIN_TEST_MNEMONIC="word1 word2 ..."`
+2. Run `login-test` to load the test private account
+3. Run `private-balance usdc` to check available private collateral
+4. Run `private-supply <amount>` to supply private collateral to Aave
+5. Run `supply-positions` to get the current `positionId`
+6. Run `private-borrow <positionId> <amount>` to borrow private WETH
+7. Run `private-repay <positionId> <amount>` to repay private WETH debt
+
 ### First-time private supply flow
 
 On frontend:
