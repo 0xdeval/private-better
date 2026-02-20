@@ -36,6 +36,15 @@ This module implements private supply/borrow/repay/withdraw routing with per-own
 3. Withdraw requires matching secret and rotates secret on partial withdraw
 4. Vault account identity is `zkOwnerHash`, not public EOA
 
+‼️ Warning:
+Currently the mechanism of `withdrawAuthNote` is used for the contract. The private withdrawAuthNote is generate after each `supply` and `borrow` (and during partial `repay` and `withdraw`) operation and save to your browser `localStorage`. Clearing site storage deletes it!
+
+So:
+
+- If you clear browser cache/local storage, local withdraw auth secrets are deleted
+- Without the correct withdraw auth secret, you cannot call `private-withdraw` for existing supplied positions
+- Until secret backup/export is shipped, treat browser/session data as required to recover supplied funds through WebCLI
+
 ## Required Env Keys
 
 1. `RPC_URL`

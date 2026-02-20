@@ -4,13 +4,29 @@ Hush brings private DeFi UX to Aave: users can supply USDC privately as collater
 
 **The core privacy infrastructure that is used under the hood is provided by the [Hinkal protocol](https://hinkal.pro/). More information about the integration ["Hinkal integration" page](docs/hinkal-integration.md)**
 
-\***\*Supply mechanism:\*\***
+📋 [Evaluation guide](docs/evaluation-guide.md)
+
+**Supply mechanism:**
 ![value-flow](docs/supply-flow.png)
 
-\***\*Borrow mechanism:\*\***
+**Borrow mechanism:**
 ![value-flow](docs/borrow-flow.png)
 
-> [Evaluation guides](#user-flows)
+## Table of Contents
+
+- [How does it work?](#how-does-it-work)
+- [User flows](#user-flows)
+  - [All WebCLI commands](#all-webcli-commands)
+- [Get started](#get-started)
+- [Contract smoke tests (auto-cleanup)](#contract-smoke-tests-auto-cleanup)
+- [Environment variables](#environment-variables)
+  - [WebCLI (`.env`)](#webcli-env)
+  - [Contracts / scripts (`.env`)](#contracts--scripts-env)
+- [Fee reserve guard](#fee-reserve-guard)
+- [Roadmap](#roadmap)
+  - [Next improvements](#next-improvements)
+  - [Withdraw Auth Note](#withdraw-auth-note)
+- [Other files](#other-files)
 
 ## How does it work?
 
@@ -53,23 +69,23 @@ Evaluation docs:
 
 ### All WebCLI commands
 
-| Command            | Arguments                      | Description                                             | Example                              |
-| ------------------ | ------------------------------ | ------------------------------------------------------- | ------------------------------------ | ---------------------- |
-| `help`             | none                           | Show available commands                                 | `help`                               |
-| `clear`            | none                           | Clear terminal output                                   | `clear`                              |
-| `login`            | none                           | Create/load encrypted local private session             | `login`                              |
-| `login-test`       | `[mnemonic]`                   | Load test private session from arg or `.env` mnemonic   | `login-test`                         |
-| `import`           | `<mnemonic>`                   | Import private session from mnemonic                    | `import word1 word2 ...`             |
-| `approve`          | `<amount>`                     | Approve token spend for Hinkal shield flow              | `approve 1.5`                        |
-| `shield`           | `<amount>`                     | Move public token balance to private balance            | `shield 1.5`                         |
-| `unshield`         | `<amount> [recipient]`         | Move private balance back to public address             | `unshield 0.5`                       |
-| `unshield-weth`    | `<amount> [recipient]`         | Move private WETH balance to public address             | `unshield-weth 0.005`                |
-| `private-balance`  | `[usdc                         | weth]`                                                  | Show private spendable token balance | `private-balance weth` |
-| `private-supply`   | `<amount>`                     | Supply private funds to Aave via adapter/vault          | `private-supply 1.0`                 |
-| `supply-positions` | none                           | List private supply positions for current private owner | `supply-positions`                   |
-| `private-withdraw` | `<positionId> <amount OR max>` | Withdraw from Aave position back to private balance     | `private-withdraw 1 max`             |
-| `private-borrow`   | `<positionId> <amount>`        | Borrow WETH privately from a collateralized position    | `private-borrow 1 0.01`              |
-| `private-repay`    | `<positionId> <amount>`        | Repay WETH debt privately from private balance          | `private-repay 1 0.005`              |
+| Command            | Arguments                      | Description                                             | Example                  |
+| ------------------ | ------------------------------ | ------------------------------------------------------- | ------------------------ |
+| `help`             | none                           | Show available commands                                 | `help`                   |
+| `clear`            | none                           | Clear terminal output                                   | `clear`                  |
+| `login`            | none                           | Create/load encrypted local private session             | `login`                  |
+| `login-test`       | `[mnemonic]`                   | Load test private session from arg or `.env` mnemonic   | `login-test`             |
+| `import`           | `<mnemonic>`                   | Import private session from mnemonic                    | `import word1 word2 ...` |
+| `approve`          | `<amount>`                     | Approve token spend for Hinkal shield flow              | `approve 1.5`            |
+| `shield`           | `<amount>`                     | Move public token balance to private balance            | `shield 1.5`             |
+| `unshield`         | `<amount> [recipient]`         | Move private balance back to public address             | `unshield 0.5`           |
+| `unshield-weth`    | `<amount> [recipient]`         | Move private WETH balance to public address             | `unshield-weth 0.005`    |
+| `private-balance`  | `[usdc \| weth]`               | Show private spendable token balance                    | `private-balance weth`   |
+| `private-supply`   | `<amount>`                     | Supply private funds to Aave via adapter/vault          | `private-supply 1.0`     |
+| `supply-positions` | none                           | List private supply positions for current private owner | `supply-positions`       |
+| `private-withdraw` | `<positionId> <amount OR max>` | Withdraw from Aave position back to private balance     | `private-withdraw 1 max` |
+| `private-borrow`   | `<positionId> <amount>`        | Borrow WETH privately from a collateralized position    | `private-borrow 1 0.01`  |
+| `private-repay`    | `<positionId> <amount>`        | Repay WETH debt privately from private balance          | `private-repay 1 0.005`  |
 
 ## Get started
 
