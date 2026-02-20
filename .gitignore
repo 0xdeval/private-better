@@ -36,3 +36,4 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 contracts/cache
 contracts/cache/solidity-files-cache.json
 contracts/out
+.vercel

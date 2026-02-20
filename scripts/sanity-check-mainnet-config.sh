@@ -65,13 +65,13 @@ if ! command -v cast >/dev/null 2>&1; then
   exit 1
 fi
 
-for key in RPC_URL PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY PRIVATE_EMPORIUM; do
+for key in RPC_URL PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN BORROW_TOKEN AAVE_POOL VAULT_FACTORY PRIVATE_EMPORIUM; do
   require_env "${key}"
 done
 
 EXPECTED_EXECUTOR="${PRIVATE_EMPORIUM}"
 
-for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY; do
+for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN BORROW_TOKEN AAVE_POOL VAULT_FACTORY; do
   if ! is_address "${!key}"; then
     echo "Error: ${key} is not a valid 0x address." >&2
     exit 1
@@ -87,15 +87,18 @@ ADAPTER_TOKEN="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "supplyToken()(address)" 
 ADAPTER_POOL="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "aavePool()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_FACTORY="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "vaultFactory()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_EXECUTOR="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "privacyExecutor()(address)" --rpc-url "${RPC_URL}")"
+ADAPTER_BORROW_ALLOWED="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "isBorrowTokenAllowed(address)(bool)" "${BORROW_TOKEN}" --rpc-url "${RPC_URL}")"
 
-echo "Private Better Mainnet Sanity Check"
+echo "Hush Mainnet Sanity Check"
 echo "RPC:                 ${RPC_URL}"
 echo "Chain ID:            ${CHAIN_ID}"
 echo "Adapter:             ${PRIVATE_SUPPLY_ADAPTER}"
 echo "Aave pool (env/adp): ${AAVE_POOL} / ${ADAPTER_POOL}"
 echo "Token (env/adp):     ${SUPPLY_TOKEN} / ${ADAPTER_TOKEN}"
+echo "Borrow token (env):  ${BORROW_TOKEN}"
 echo "Factory (env/adp):   ${VAULT_FACTORY} / ${ADAPTER_FACTORY}"
 echo "Executor (env/adp):  ${EXPECTED_EXECUTOR} / ${ADAPTER_EXECUTOR}"
+echo "Borrow allowed:      ${ADAPTER_BORROW_ALLOWED}"
 
 if [[ "$(to_lower "${SUPPLY_TOKEN}")" != "$(to_lower "${ADAPTER_TOKEN}")" ]]; then
   echo "Error: adapter supplyToken() mismatch." >&2
@@ -111,6 +114,10 @@ if [[ "$(to_lower "${VAULT_FACTORY}")" != "$(to_lower "${ADAPTER_FACTORY}")" ]];
 fi
 if [[ "$(to_lower "${EXPECTED_EXECUTOR}")" != "$(to_lower "${ADAPTER_EXECUTOR}")" ]]; then
   echo "Error: adapter privacyExecutor() mismatch." >&2
+  exit 1
+fi
+if [[ "$(to_lower "${ADAPTER_BORROW_ALLOWED}")" != "true" ]]; then
+  echo "Error: adapter borrow token is not allowlisted." >&2
   exit 1
 fi
 

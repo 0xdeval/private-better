@@ -1,4 +1,6 @@
 import { Contract, ethers } from 'ethers';
+import figlet from 'figlet';
+import slantFont from 'figlet/fonts/Slant';
 import {
   ExternalActionId,
   convertEmporiumOpToCallInfo,
@@ -7,6 +9,7 @@ import {
 } from '@hinkal/common';
 
 import {
+  BORROW_TOKEN_WETH_ADDRESS,
   PRIVATE_CHAIN,
   PRIVATE_CHAIN_PARAMS,
   PRIVATE_EMPORIUM_ADDRESS,
@@ -22,10 +25,17 @@ import {
   type PrivacyLocalSession,
 } from '../privacy/privacySession';
 import {
+  BORROW_WETH_TOKEN_CONFIG,
+  type CliTokenConfig,
+  SUPPLY_TOKEN_CONFIG,
+  DEFAULT_PRIVATE_FEE_BUFFER_BPS,
+  FEE_BPS_DENOMINATOR,
+  DEFAULT_PRIVATE_FEE_BUFFER_MIN,
+} from './constants';
+import {
   formatTokenAmount,
   parseTokenAmount,
 } from './amounts';
-import { DEFAULT_PRIVATE_FEE_BUFFER_BPS, FEE_BPS_DENOMINATOR, DEFAULT_PRIVATE_FEE_BUFFER_MIN } from './constants';
 import type {
   ActivePrivacySession,
   EthereumProvider,
@@ -39,10 +49,20 @@ const env = (import.meta as ImportMeta & { env?: Record<string, string | undefin
 
 export class WebCliRuntime {
   readonly manager = new HinkalManager();
+  private static bannerFontLoaded = false;
+  private static readonly spinnerFrames = ['|', '/', '-', '\\'];
 
   private privacySession: ActivePrivacySession | null = null;
   private legacyStoragePurged = false;
   private terminalEl: HTMLElement;
+  private spinnerState:
+    | {
+        lineEl: HTMLDivElement;
+        intervalId: number;
+        frameIndex: number;
+        label: string;
+      }
+    | null = null;
 
   constructor(terminalEl: HTMLElement) {
     this.terminalEl = terminalEl;
@@ -54,28 +74,86 @@ export class WebCliRuntime {
     if (type === 'muted') line.className = 'line-muted';
     if (type === 'ok') line.className = 'line-ok';
     if (type === 'err') line.className = 'line-err';
-    this.terminalEl.appendChild(line);
+    if (this.spinnerState?.lineEl.parentElement === this.terminalEl) {
+      this.terminalEl.insertBefore(line, this.spinnerState.lineEl);
+    } else {
+      this.terminalEl.appendChild(line);
+    }
     this.terminalEl.scrollTop = this.terminalEl.scrollHeight;
   }
 
   clear = () => {
+    this.stopSpinner();
     this.terminalEl.innerHTML = '';
   };
 
+  private renderSpinner() {
+    if (!this.spinnerState) return;
+    const frame = WebCliRuntime.spinnerFrames[this.spinnerState.frameIndex];
+    this.spinnerState.lineEl.textContent = `${frame} ${this.spinnerState.label}`;
+    this.spinnerState.frameIndex =
+      (this.spinnerState.frameIndex + 1) % WebCliRuntime.spinnerFrames.length;
+    this.terminalEl.scrollTop = this.terminalEl.scrollHeight;
+  }
+
+  private startSpinner(label: string) {
+    this.stopSpinner();
+
+    const lineEl = document.createElement('div');
+    lineEl.className = 'line-muted';
+    this.terminalEl.appendChild(lineEl);
+
+    this.spinnerState = {
+      lineEl,
+      intervalId: window.setInterval(() => this.renderSpinner(), 100),
+      frameIndex: 0,
+      label,
+    };
+    this.renderSpinner();
+  }
+
+  private stopSpinner() {
+    if (!this.spinnerState) return;
+    window.clearInterval(this.spinnerState.intervalId);
+    this.spinnerState.lineEl.remove();
+    this.spinnerState = null;
+  }
+
+  async withSpinner<T>(label: string, task: () => Promise<T>): Promise<T> {
+    this.startSpinner(label);
+    try {
+      return await task();
+    } finally {
+      this.stopSpinner();
+    }
+  }
+
+  private ensureBannerFont() {
+    if (WebCliRuntime.bannerFontLoaded) return;
+    figlet.parseFont('Slant', slantFont);
+    WebCliRuntime.bannerFontLoaded = true;
+  }
+
+  private printBanner() {
+    try {
+      this.ensureBannerFont();
+      const banner = figlet.textSync('Hush', {
+        font: 'Slant',
+        horizontalLayout: 'full',
+      });
+      for (const line of banner.split('\n')) {
+        this.write(line, 'ok');
+      }
+    } catch {
+      this.write('Hush', 'ok');
+    }
+  }
+
   printStartup() {
-    this.write('Private Better Web CLI ready. Type `help`.', 'ok');
-    this.write(`Network: ${PRIVATE_NETWORK}`, 'muted');
-    this.write('Quick start:', 'muted');
-    this.write('1) login -> login to private wallet', 'muted');
-    this.write('2) approve 1 -> approve token to Hinkal shield contract', 'muted');
-    this.write('3) shield 1 -> shield token to private balance', 'muted');
-    this.write('4) unshield 1 -> unshield token to public wallet', 'muted');
-    this.write('5) private-balance -> show spendable private token balance', 'muted');
-    this.write('6) private-supply 1 -> create private supply position on Aave', 'muted');
-    this.write(
-      '7) private-withdraw <positionId> <amount|max> -> withdraw from Aave position to private balance',
-      'muted',
-    );
+    this.printBanner();
+    this.write(`Connected network: ${PRIVATE_NETWORK}`, 'ok');
+    this.write('Hush Web CLI ready. Type `help` or `get-started` to get started', 'ok');
+
   }
 
   isDebugEnabled(): boolean {
@@ -189,6 +267,24 @@ export class WebCliRuntime {
     return this.requireEnvAddress('VITE_SUPPLY_TOKEN', SUPPLY_TOKEN_ADDRESS);
   }
 
+  getBorrowTokenWethAddress(): string {
+    return this.requireEnvAddress('VITE_BORROW_TOKEN_WETH', BORROW_TOKEN_WETH_ADDRESS);
+  }
+
+  getSupplyTokenConfig(): CliTokenConfig & { address: string } {
+    return {
+      ...SUPPLY_TOKEN_CONFIG,
+      address: this.getSupplyTokenAddress(),
+    };
+  }
+
+  getBorrowWethTokenConfig(): CliTokenConfig & { address: string } {
+    return {
+      ...BORROW_WETH_TOKEN_CONFIG,
+      address: this.getBorrowTokenWethAddress(),
+    };
+  }
+
   getAdapterAddress(): string {
     return this.requireEnvAddress('VITE_PRIVATE_SUPPLY_ADAPTER', PRIVATE_SUPPLY_ADAPTER_ADDRESS);
   }
@@ -212,7 +308,7 @@ export class WebCliRuntime {
     const raw = env?.VITE_PRIVATE_FEE_BUFFER_MIN;
     if (!raw) return DEFAULT_PRIVATE_FEE_BUFFER_MIN;
     try {
-      return parseTokenAmount(raw);
+      return parseTokenAmount(raw, SUPPLY_TOKEN_CONFIG.decimals);
     } catch {
       this.debug(`Invalid VITE_PRIVATE_FEE_BUFFER_MIN="${raw}". Using default.`);
       return DEFAULT_PRIVATE_FEE_BUFFER_MIN;
@@ -296,6 +392,70 @@ export class WebCliRuntime {
     ];
   }
 
+  buildPrivateBorrowOps(params: {
+    adapterAddress: string;
+    emporiumAddress: string;
+    debtTokenAddress: string;
+    positionId: bigint;
+    amount: bigint;
+    authSecret: string;
+    nextAuthHash: string;
+  }): string[] {
+    const adapterInterface = new ethers.utils.Interface([
+      'function borrowToRecipient(uint256 positionId, address debtToken, uint256 amount, bytes32 authSecret, bytes32 nextAuthHash, address recipient) returns (uint256)',
+    ]);
+    return [
+      emporiumOp({
+        contract: params.adapterAddress,
+        callDataString: adapterInterface.encodeFunctionData('borrowToRecipient', [
+          params.positionId,
+          params.debtTokenAddress,
+          params.amount,
+          params.authSecret,
+          params.nextAuthHash,
+          params.emporiumAddress,
+        ]),
+      }),
+    ];
+  }
+
+  buildPrivateRepayOps(params: {
+    adapterAddress: string;
+    debtTokenAddress: string;
+    positionId: bigint;
+    amount: bigint;
+    authSecret: string;
+    nextAuthHash: string;
+  }): string[] {
+    const erc20Interface = new ethers.utils.Interface([
+      'function transfer(address to, uint256 amount) returns (bool)',
+    ]);
+    const adapterInterface = new ethers.utils.Interface([
+      'function repayFromPrivate(uint256 positionId, address debtToken, uint256 amount, bytes32 authSecret, bytes32 nextAuthHash) returns (uint256)',
+    ]);
+    return [
+      emporiumOp({
+        contract: params.debtTokenAddress,
+        callDataString: erc20Interface.encodeFunctionData('transfer', [
+          params.adapterAddress,
+          params.amount,
+        ]),
+        invokeWallet: false,
+      }),
+      emporiumOp({
+        contract: params.adapterAddress,
+        callDataString: adapterInterface.encodeFunctionData('repayFromPrivate', [
+          params.positionId,
+          params.debtTokenAddress,
+          params.amount,
+          params.authSecret,
+          params.nextAuthHash,
+        ]),
+        invokeWallet: false,
+      }),
+    ];
+  }
+
   async estimateEmporiumFlatFee(params: {
     walletAddress: string;
     feeTokenAddress: string;
@@ -352,7 +512,7 @@ export class WebCliRuntime {
     const signer = provider.getSigner(signerAddress);
     const network = await provider.getNetwork();
     const chainId = network.chainId;
-    const message = `Private Better Privacy Session v1\nChain:${chainId}\nAddress:${signerAddress.toLowerCase()}`;
+    const message = `Hush Privacy Session v1\nChain:${chainId}\nAddress:${signerAddress.toLowerCase()}`;
     const signature = await signer.signMessage(message);
     return { chainId: BigInt(chainId), sessionKeyHex: ethers.utils.keccak256(signature) };
   }
@@ -437,6 +597,25 @@ export class WebCliRuntime {
     }
   }
 
+  async validatePrivateBorrowConfig(
+    provider: ethers.providers.Web3Provider,
+    adapterAddress: string,
+    supplyTokenAddress: string,
+    borrowTokenAddress: string,
+    emporiumAddress: string,
+  ): Promise<void> {
+    await this.validatePrivateSupplyConfig(provider, adapterAddress, supplyTokenAddress, emporiumAddress);
+    const adapter = new Contract(adapterAddress, [
+      'function isBorrowTokenAllowed(address token) view returns (bool)',
+    ], provider) as any;
+    const isAllowed = await adapter.isBorrowTokenAllowed(borrowTokenAddress);
+    if (!isAllowed) {
+      throw new Error(
+        `Borrow token is not enabled in adapter. Configure via setBorrowTokenAllowed(${borrowTokenAddress}, true).`,
+      );
+    }
+  }
+
   formatError(error: unknown): string {
     if (error instanceof Error) {
       const maybeRpcError = error as Error & EthereumRpcError;
@@ -460,9 +639,9 @@ export class WebCliRuntime {
   }
 
   debugFeeEstimate(label: string, flatFee: bigint, reserve: bigint, required?: bigint) {
-    const requiredPart = required == null ? '' : ` required=${formatTokenAmount(required)}`;
+    const requiredPart = required == null ? '' : ` required=${formatTokenAmount(required, SUPPLY_TOKEN_CONFIG.decimals)}`;
     this.debug(
-      `${label}: flatFee=${formatTokenAmount(flatFee)} reserve=${formatTokenAmount(reserve)}${requiredPart}`,
+      `${label}: flatFee=${formatTokenAmount(flatFee, SUPPLY_TOKEN_CONFIG.decimals)} reserve=${formatTokenAmount(reserve, SUPPLY_TOKEN_CONFIG.decimals)}${requiredPart}`,
     );
   }
 }

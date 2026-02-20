@@ -1,9 +1,12 @@
 {
-  "name": "private-better",
+  "name": "hush",
   "module": "index.ts",
   "type": "module",
   "private": true,
   "scripts": {
+    "dev": "bun run dev:web",
+    "build": "bun run build:web",
+    "preview": "bun run preview:web",
     "dev:web": "bunx --bun vite --force --port 3017 --strictPort",
     "build:web": "bunx --bun vite build",
     "preview:web": "bunx --bun vite preview --port 3017",
@@ -19,13 +22,14 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@hinkal/common": "latest",
+    "@hinkal/common": "^0.2.22",
     "assert": "^2.1.0",
     "browserify-zlib": "^0.2.0",
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",
     "ethers": "5.7.2",
     "events": "^3.3.0",
+    "figlet": "^1.10.0",
     "http-browserify": "^1.7.0",
     "https-browserify": "^1.0.0",
     "os-browserify": "^0.3.0",

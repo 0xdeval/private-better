@@ -23,7 +23,7 @@ class WebCLI {
 
         this.history.push(raw);
         this.historyIndex = this.history.length;
-        this.runtime.write(`pb> ${raw}`, 'muted');
+        this.runtime.write(`hush> ${raw}`, 'muted');
         await executeCommand(this.runtime, raw);
       }
 

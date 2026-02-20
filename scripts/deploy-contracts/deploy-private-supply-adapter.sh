@@ -71,6 +71,7 @@ require_env RPC_URL
 require_env DEPLOYER_PRIVATE_KEY
 require_env AAVE_POOL
 require_env SUPPLY_TOKEN
+require_env BORROW_TOKEN
 require_env VAULT_FACTORY
 require_env PRIVATE_EMPORIUM
 
@@ -79,7 +80,7 @@ if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   exit 1
 fi
 
-for key in AAVE_POOL SUPPLY_TOKEN VAULT_FACTORY; do
+for key in AAVE_POOL SUPPLY_TOKEN BORROW_TOKEN VAULT_FACTORY; do
   if ! is_address "${!key}"; then
     echo "Error: ${key} must be a valid 0x address." >&2
     exit 1
@@ -95,6 +96,7 @@ echo "RPC:              ${RPC_URL}"
 echo "Emporium caller:  ${PRIVATE_EMPORIUM}"
 echo "Aave pool:        ${AAVE_POOL}"
 echo "Supply token:     ${SUPPLY_TOKEN}"
+echo "Borrow token:     ${BORROW_TOKEN}"
 echo "Vault factory:    ${VAULT_FACTORY}"
 
 DEPLOY_OUTPUT="$(forge create contracts/PrivateSupplyAdapter.sol:PrivateSupplyAdapter \
@@ -134,3 +136,9 @@ cast send "${VAULT_FACTORY}" \
   "setAdapter(address)" "${ADAPTER_ADDRESS}" \
   --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
 echo "Factory adapter set successfully."
+
+echo "Setting borrow token allowlist..."
+cast send "${ADAPTER_ADDRESS}" \
+  "setBorrowTokenAllowed(address,bool)" "${BORROW_TOKEN}" "true" \
+  --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+echo "Borrow token allowlist set successfully."

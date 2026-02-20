@@ -3,8 +3,30 @@ import { Contract, ethers, Wallet } from 'ethers';
 import { loadPrivacySession } from '../../privacy/privacySession';
 import { ERC20_ABI } from '../abis';
 import { formatTokenAmount, parseTokenAmount } from '../amounts';
-import { TOKEN_DECIMALS } from '../constants';
 import { WebCliRuntime } from '../runtime';
+
+const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+const LOGIN_TEST_MNEMONIC_KEY = 'VITE_LOGIN_TEST_MNEMONIC';
+
+const activateSessionFromMnemonic = async (
+  runtime: WebCliRuntime,
+  mnemonic: string,
+  chainId: bigint,
+  signerAddress: string,
+  sessionKeyHex: string,
+) => {
+  const privateAddress = runtime.manager.derivePrivateAddress(mnemonic);
+  runtime.setActiveSession({
+    privateAddress,
+    mnemonic,
+    positionSecrets: {},
+    sessionKeyHex,
+    eoaAddress: signerAddress,
+    chainId,
+  });
+  await runtime.saveActiveSession();
+  return privateAddress;
+};
 
 export const loginCommand = async (runtime: WebCliRuntime) => {
   await runtime.ensureTargetNetwork();
@@ -32,16 +54,13 @@ export const loginCommand = async (runtime: WebCliRuntime) => {
     throw new Error('Could not generate mnemonic.');
   }
 
-  const privateAddress = runtime.manager.derivePrivateAddress(mnemonic);
-  runtime.setActiveSession({
-    privateAddress,
+  const privateAddress = await activateSessionFromMnemonic(
+    runtime,
     mnemonic,
-    positionSecrets: {},
-    sessionKeyHex,
-    eoaAddress: signerAddress,
     chainId,
-  });
-  await runtime.saveActiveSession();
+    signerAddress,
+    sessionKeyHex,
+  );
   runtime.write(`Private account created: ${privateAddress}`, 'ok');
   runtime.write(`Backup mnemonic now (sensitive): ${mnemonic}`, 'muted');
 };
@@ -56,17 +75,36 @@ export const importCommand = async (runtime: WebCliRuntime, mnemonic: string) =>
   const { chainId, sessionKeyHex } = await runtime.deriveSessionKey(provider, signerAddress);
   await runtime.ensurePrivacyInitialized();
 
-  const privateAddress = runtime.manager.derivePrivateAddress(mnemonic);
-  runtime.setActiveSession({
-    privateAddress,
+  const privateAddress = await activateSessionFromMnemonic(
+    runtime,
     mnemonic,
-    positionSecrets: {},
-    sessionKeyHex,
-    eoaAddress: signerAddress,
     chainId,
-  });
-  await runtime.saveActiveSession();
+    signerAddress,
+    sessionKeyHex,
+  );
   runtime.write(`Private account imported: ${privateAddress}`, 'ok');
+};
+
+export const loginTestCommand = async (runtime: WebCliRuntime, mnemonicOverride: string | undefined) => {
+  const rawMnemonic = mnemonicOverride?.trim() || env?.[LOGIN_TEST_MNEMONIC_KEY]?.trim();
+  if (!rawMnemonic) {
+    throw new Error(`Usage: login-test [mnemonic]. Or set ${LOGIN_TEST_MNEMONIC_KEY} in .env`);
+  }
+
+  await runtime.ensureTargetNetwork();
+  const { provider, signerAddress } = await runtime.getSigner();
+  runtime.write('Please sign the session message in your wallet...', 'muted');
+  const { chainId, sessionKeyHex } = await runtime.deriveSessionKey(provider, signerAddress);
+  await runtime.ensurePrivacyInitialized();
+
+  const privateAddress = await activateSessionFromMnemonic(
+    runtime,
+    rawMnemonic,
+    chainId,
+    signerAddress,
+    sessionKeyHex,
+  );
+  runtime.write(`Test private account loaded: ${privateAddress}`, 'ok');
 };
 
 export const approveCommand = async (runtime: WebCliRuntime, amountText: string | undefined) => {
@@ -78,14 +116,14 @@ export const approveCommand = async (runtime: WebCliRuntime, amountText: string 
   runtime.assertSessionEoa(session, signerAddress);
   const signer = await runtime.getBoundSigner(provider, signerAddress);
 
-  const amount = ethers.utils.parseUnits(amountText, TOKEN_DECIMALS);
-  const token = runtime.getSupplyTokenAddress();
+  const supplyToken = runtime.getSupplyTokenConfig();
+  const amount = ethers.utils.parseUnits(amountText, supplyToken.decimals);
   const spender = await runtime.manager.getShieldSpender({
     mnemonic: session.mnemonic,
     publicWallet: signer,
   });
 
-  const erc20 = new Contract(token, ERC20_ABI, signer) as any;
+  const erc20 = new Contract(supplyToken.address, ERC20_ABI, signer) as any;
   const tx = await erc20.approve(spender, amount);
   runtime.write(`Approve submitted: ${tx.hash}`);
   await tx.wait();
@@ -103,12 +141,12 @@ export const shieldCommand = async (runtime: WebCliRuntime, amountText: string |
   const { provider, signerAddress } = await runtime.getSigner();
   runtime.assertSessionEoa(session, signerAddress);
   const signer = await runtime.getBoundSigner(provider, signerAddress);
-  const amount = parseTokenAmount(amountText);
-  const tokenAddress = runtime.getSupplyTokenAddress();
+  const supplyToken = runtime.getSupplyTokenConfig();
+  const amount = parseTokenAmount(amountText, supplyToken.decimals);
 
   const txHash = await runtime.manager.shieldToken({
     mnemonic: session.mnemonic,
-    tokenAddress,
+    token: supplyToken,
     amount,
     publicWallet: signer,
   });
@@ -131,13 +169,13 @@ export const unshieldCommand = async (
   const { provider, signerAddress } = await runtime.getSigner();
   runtime.assertSessionEoa(session, signerAddress);
   const signer = await runtime.getBoundSigner(provider, signerAddress);
-  const amount = parseTokenAmount(amountText);
-  const tokenAddress = runtime.getSupplyTokenAddress();
+  const supplyToken = runtime.getSupplyTokenConfig();
+  const amount = parseTokenAmount(amountText, supplyToken.decimals);
   const recipient = recipientAddress ?? signerAddress;
 
   const txHash = await runtime.manager.unshieldToken({
     mnemonic: session.mnemonic,
-    tokenAddress,
+    token: supplyToken,
     amount,
     recipientAddress: recipient,
     publicWallet: signer,
@@ -145,19 +183,67 @@ export const unshieldCommand = async (
   runtime.write(`Unshield confirmed: ${txHash}`, 'ok');
 };
 
-export const privateBalanceCommand = async (runtime: WebCliRuntime) => {
+export const unshieldWethCommand = async (
+  runtime: WebCliRuntime,
+  amountText: string | undefined,
+  recipientAddress: string | undefined,
+) => {
+  if (!amountText) {
+    throw new Error('Usage: unshield-weth <amount> [recipient]');
+  }
+
+  const session = runtime.requireActiveSession();
+  await runtime.ensureTargetNetwork();
+  await runtime.ensurePrivacyInitialized();
+  const { provider, signerAddress } = await runtime.getSigner();
+  runtime.assertSessionEoa(session, signerAddress);
+  const signer = await runtime.getBoundSigner(provider, signerAddress);
+  const borrowToken = runtime.getBorrowWethTokenConfig();
+  const amount = parseTokenAmount(amountText, borrowToken.decimals);
+  const recipient = recipientAddress ?? signerAddress;
+
+  const txHash = await runtime.manager.unshieldToken({
+    mnemonic: session.mnemonic,
+    token: borrowToken,
+    amount,
+    recipientAddress: recipient,
+    publicWallet: signer,
+  });
+  runtime.write(`Unshield WETH confirmed: ${txHash}`, 'ok');
+};
+
+export const privateBalanceCommand = async (
+  runtime: WebCliRuntime,
+  tokenText: string | undefined,
+) => {
   await runtime.ensureTargetNetwork();
   await runtime.ensurePrivacyInitialized();
   const session = runtime.requireActiveSession();
   const { provider, signerAddress } = await runtime.getSigner();
   runtime.assertSessionEoa(session, signerAddress);
   const signer = await runtime.getBoundSigner(provider, signerAddress);
-  const tokenAddress = runtime.getSupplyTokenAddress();
+  const normalized = tokenText?.toLowerCase();
+  if (normalized && normalized !== 'usdc' && normalized !== 'weth') {
+    throw new Error('Usage: private-balance [usdc|weth]');
+  }
+  const token = normalized === 'weth' ? runtime.getBorrowWethTokenConfig() : runtime.getSupplyTokenConfig();
 
-  const balance = await runtime.manager.getPrivateSpendableBalance({
+  let balance = await runtime.manager.getPrivateSpendableBalance({
     mnemonic: session.mnemonic,
-    tokenAddress,
+    tokenAddress: token.address,
     publicWallet: signer,
   });
-  runtime.write(`Private spendable balance: ${formatTokenAmount(balance)}`, 'ok');
+  if (balance === 0n) {
+    balance = await runtime.manager.getPrivateSpendableBalance({
+      mnemonic: session.mnemonic,
+      tokenAddress: token.address,
+      publicWallet: signer,
+      forceRefresh: true,
+    });
+    runtime.write('Synced private balance from latest snapshot.', 'muted');
+  }
+  runtime.write(
+    `Private spendable ${token.symbol} balance: ${formatTokenAmount(balance, token.decimals)}`,
+    'ok',
+  );
 };

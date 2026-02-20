@@ -20,9 +20,10 @@ export type HinkalSubAccount = {
 export type HinkalContract = { address?: string };
 
 export type HinkalLike = {
-  initUserKeysFromSeedPhrases: (seedPhrases: string[]) => Promise<void>;
-  resetMerkle: (chains?: number[]) => Promise<void>;
-  checkAccessToken: (chainId: number) => Promise<boolean>;
+  initUserKeysWithPassword?: (password: string) => Promise<void>;
+  initUserKeys?: (isPrivateTransfer?: boolean) => Promise<void>;
+  resetMerkle: () => Promise<void>;
+  checkAccessToken: () => Promise<boolean>;
   getRecipientInfo?: () => string;
   userKeys?: {
     getShieldedPrivateKey?: () => string;
@@ -31,7 +32,7 @@ export type HinkalLike = {
   };
   getEthereumAddress?: () => Promise<string>;
   getEthereumAddressByChain?: (chainId: number) => Promise<string>;
-  getContract: (chainId: number, contractType: number, contractAddress?: string) => HinkalContract;
+  getContract: (contractType: number, contractAddress?: string, chainId?: number) => HinkalContract;
   getBalances?: (
     chainId: number,
     shieldedPrivateKey?: string,
@@ -49,8 +50,7 @@ export type HinkalLike = {
     isRelayerOff: boolean,
   ) => Promise<unknown>;
   actionPrivateWallet: (
-    chainId: number,
-    erc20Tokens: HinkalToken[],
+    erc20Addresses: string[],
     deltaAmounts: bigint[],
     onChainCreation: boolean[],
     ops: string[],

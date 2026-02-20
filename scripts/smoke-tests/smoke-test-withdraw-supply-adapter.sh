@@ -91,6 +91,7 @@ require_env RPC_URL
 require_env DEPLOYER_PRIVATE_KEY
 require_env PRIVATE_SUPPLY_ADAPTER
 require_env SUPPLY_TOKEN
+require_env BORROW_TOKEN
 require_env AAVE_POOL
 require_env VAULT_FACTORY
 
@@ -99,7 +100,7 @@ if ! [[ "${DEPLOYER_PRIVATE_KEY}" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
   exit 1
 fi
 
-for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN AAVE_POOL VAULT_FACTORY; do
+for key in PRIVATE_SUPPLY_ADAPTER SUPPLY_TOKEN BORROW_TOKEN AAVE_POOL VAULT_FACTORY; do
   if ! is_address "${!key}"; then
     echo "Error: ${key} must be a valid 0x address." >&2
     exit 1
@@ -109,12 +110,14 @@ done
 SMOKE_STAKE_AMOUNT="${SMOKE_STAKE_AMOUNT:-1000000}"
 SMOKE_WITHDRAW_AMOUNT="${SMOKE_WITHDRAW_AMOUNT:-${SMOKE_STAKE_AMOUNT}}"
 SMOKE_ZK_OWNER_LABEL="${SMOKE_ZK_OWNER_LABEL:-zk-owner-withdraw-smoke-$(date +%s)}"
-SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-withdraw-secret-withdraw-smoke-$(date +%s)}"
+SMOKE_WITHDRAW_SECRET_LABEL="${SMOKE_WITHDRAW_SECRET_LABEL:-smoke-$(date +%Y%m%d-%H%M%S)-withdraw}"
 SMOKE_SET_EXECUTOR_TO_DEPLOYER="${SMOKE_SET_EXECUTOR_TO_DEPLOYER:-true}"
 SMOKE_RESTORE_EXECUTOR="${SMOKE_RESTORE_EXECUTOR:-true}"
+MAX_UINT="115792089237316195423570985008687907853269984665640564039457584007913129639935"
+ZERO_HASH="0x0000000000000000000000000000000000000000000000000000000000000000"
 
 if [[ "$(echo "${SMOKE_WITHDRAW_AMOUNT}" | tr '[:upper:]' '[:lower:]')" == "max" ]]; then
-  SMOKE_WITHDRAW_AMOUNT="115792089237316195423570985008687907853269984665640564039457584007913129639935"
+  SMOKE_WITHDRAW_AMOUNT="${MAX_UINT}"
 fi
 
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "${DEPLOYER_PRIVATE_KEY}")"
@@ -122,8 +125,28 @@ ORIGINAL_EXECUTOR="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "privacyExecutor()(ad
 ADAPTER_TOKEN="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "supplyToken()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_POOL="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "aavePool()(address)" --rpc-url "${RPC_URL}")"
 ADAPTER_FACTORY="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "vaultFactory()(address)" --rpc-url "${RPC_URL}")"
+ADAPTER_BORROW_ALLOWED="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" "isBorrowTokenAllowed(address)(bool)" "${BORROW_TOKEN}" --rpc-url "${RPC_URL}")"
 DEPLOYER_TOKEN_BALANCE_RAW="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${DEPLOYER_ADDRESS}" --rpc-url "${RPC_URL}")"
 DEPLOYER_TOKEN_BALANCE="$(normalize_uint_output "${DEPLOYER_TOKEN_BALANCE_RAW}")"
+EXECUTOR_CHANGED=false
+
+cleanup_on_exit() {
+  if [[ "${EXECUTOR_CHANGED}" == "true" ]] && is_true "${SMOKE_RESTORE_EXECUTOR}"; then
+    cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+      "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
+      --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_on_exit EXIT
+
+restore_executor() {
+  if [[ "${EXECUTOR_CHANGED}" == "true" ]] && is_true "${SMOKE_RESTORE_EXECUTOR}"; then
+    cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+      "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
+      --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+    EXECUTOR_CHANGED=false
+  fi
+}
 
 echo "Starting PrivateSupplyAdapter withdraw smoke test"
 echo "RPC:               ${RPC_URL}"
@@ -133,9 +156,11 @@ echo "Aave pool (env):   ${AAVE_POOL}"
 echo "Aave pool (adp):   ${ADAPTER_POOL}"
 echo "Token (env):       ${SUPPLY_TOKEN}"
 echo "Token (adp):       ${ADAPTER_TOKEN}"
+echo "Borrow token:      ${BORROW_TOKEN}"
 echo "Factory (env):     ${VAULT_FACTORY}"
 echo "Factory (adp):     ${ADAPTER_FACTORY}"
 echo "Original executor: ${ORIGINAL_EXECUTOR}"
+echo "Borrow allowed:    ${ADAPTER_BORROW_ALLOWED}"
 echo "Withdraw amount (raw): ${SMOKE_WITHDRAW_AMOUNT}"
 echo "Deployer token bal: ${DEPLOYER_TOKEN_BALANCE}"
 
@@ -149,6 +174,10 @@ if [[ "$(to_lower "${ADAPTER_POOL}")" != "$(to_lower "${AAVE_POOL}")" ]]; then
 fi
 if [[ "$(to_lower "${ADAPTER_FACTORY}")" != "$(to_lower "${VAULT_FACTORY}")" ]]; then
   echo "Error: adapter vaultFactory() does not match VAULT_FACTORY." >&2
+  exit 1
+fi
+if [[ "$(to_lower "${ADAPTER_BORROW_ALLOWED}")" != "true" ]]; then
+  echo "Error: adapter borrow token is not allowlisted." >&2
   exit 1
 fi
 if ! [[ "${DEPLOYER_TOKEN_BALANCE}" =~ ^[0-9]+$ ]]; then
@@ -169,6 +198,7 @@ if is_true "${SMOKE_SET_EXECUTOR_TO_DEPLOYER}"; then
   cast send "${PRIVATE_SUPPLY_ADAPTER}" \
     "setPrivacyExecutor(address)" "${DEPLOYER_ADDRESS}" \
     --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+  EXECUTOR_CHANGED=true
 fi
 
 echo "Step 2/7: Funding adapter with stake token..."
@@ -223,9 +253,31 @@ RECIPIENT="${SMOKE_WITHDRAW_RECIPIENT:-${DEPLOYER_ADDRESS}}"
 BEFORE_RECIPIENT_BALANCE="$(cast call "${SUPPLY_TOKEN}" "balanceOf(address)(uint256)" "${RECIPIENT}" --rpc-url "${RPC_URL}")"
 
 echo "Step 5/7: Calling withdrawToRecipient..."
-cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-  "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)" "${EXPECTED_POSITION_ID}" "${SMOKE_WITHDRAW_AMOUNT}" "${WITHDRAW_SECRET}" "${NEXT_WITHDRAW_AUTH_HASH}" "${RECIPIENT}" \
-  --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+WITHDRAW_CALL_OUTPUT="$(
+  cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+    "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)" "${EXPECTED_POSITION_ID}" "${SMOKE_WITHDRAW_AMOUNT}" "${WITHDRAW_SECRET}" "${NEXT_WITHDRAW_AUTH_HASH}" "${RECIPIENT}" \
+    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" 2>&1
+)" || true
+
+if [[ "${WITHDRAW_CALL_OUTPUT}" == *"transactionHash"* ]]; then
+  :
+elif [[ "${WITHDRAW_CALL_OUTPUT}" == *"0x47bc4b2c"* ]] && [[ "${SMOKE_WITHDRAW_AMOUNT}" != "${MAX_UINT}" ]]; then
+  WITHDRAW_AMOUNT_DEC="$(normalize_uint_output "${SMOKE_WITHDRAW_AMOUNT}")"
+  if ! [[ "${WITHDRAW_AMOUNT_DEC}" =~ ^[0-9]+$ ]] || (( WITHDRAW_AMOUNT_DEC <= 1 )); then
+    echo "Error: withdraw failed with NotEnoughAvailableUserBalance and cannot retry with lower amount." >&2
+    restore_executor
+    exit 1
+  fi
+  RETRY_WITHDRAW_AMOUNT="$((WITHDRAW_AMOUNT_DEC - 1))"
+  echo "Withdraw retry: requested amount unavailable, retrying with ${RETRY_WITHDRAW_AMOUNT}..."
+  cast send "${PRIVATE_SUPPLY_ADAPTER}" \
+    "withdrawToRecipient(uint256,uint256,bytes32,bytes32,address)" "${EXPECTED_POSITION_ID}" "${RETRY_WITHDRAW_AMOUNT}" "${WITHDRAW_SECRET}" "${NEXT_WITHDRAW_AUTH_HASH}" "${RECIPIENT}" \
+    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
+else
+  echo "${WITHDRAW_CALL_OUTPUT}" >&2
+  restore_executor
+  exit 1
+fi
 
 echo "Step 6/7: Reading updated position..."
 POSITION="$(cast call "${PRIVATE_SUPPLY_ADAPTER}" \
@@ -238,11 +290,7 @@ echo "Recipient balance before: ${BEFORE_RECIPIENT_BALANCE}"
 echo "Recipient balance after:  ${AFTER_RECIPIENT_BALANCE}"
 
 echo "Step 7/7: Restoring executor..."
-if is_true "${SMOKE_RESTORE_EXECUTOR}"; then
-  cast send "${PRIVATE_SUPPLY_ADAPTER}" \
-    "setPrivacyExecutor(address)" "${ORIGINAL_EXECUTOR}" \
-    --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PRIVATE_KEY}" >/dev/null
-fi
+restore_executor
 
 echo
 echo "Withdraw smoke test completed."
