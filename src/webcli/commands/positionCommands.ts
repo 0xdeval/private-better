@@ -59,7 +59,7 @@ const resolveRequiredPrivateBalance = async (params: {
   label: string;
   options?: BalanceRetryOptions;
 }): Promise<bigint> => {
-  const maxRefreshAttempts = params.options?.maxRefreshAttempts ?? 2;
+  const maxRefreshAttempts = params.options?.maxRefreshAttempts ?? 3;
   const retryDelayMs = params.options?.retryDelayMs ?? 1500;
 
   let balance = await params.runtime.manager.getPrivateSpendableBalance({

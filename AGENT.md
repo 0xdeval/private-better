@@ -39,6 +39,8 @@ Railgun phase documents are historical context only.
 │  │  └─ commands/
 │  │     ├─ helpCommand.ts
 │  │     ├─ accountCommands.ts
+│  │     ├─ getStartedCommand.ts
+│  │     ├─ getStartedForJudgesCommand.ts
 │  │     └─ positionCommands.ts
 │  └─ privacy/
 │     ├─ constants.ts
@@ -95,11 +97,15 @@ Railgun phase documents are historical context only.
 
 1. Do not break `private-supply` flow unless explicitly requested.
 2. Keep `private-withdraw` private-destination semantics:
+
 - adapter recipient is Emporium
 - no public recipient address should be required in WebCLI
+
 3. Preserve per-position secret lifecycle:
+
 - rotate on borrow/repay/partial-withdraw
 - remove on full close
+
 4. Keep max-withdraw fallback retry for Aave rounding edge case (`0x47bc4b2c`).
 5. Do not edit `node_modules`.
 
@@ -146,28 +152,37 @@ Contracts/scripts:
 ## 7. Common Failure Causes
 
 1. `Insufficient funds`
+
 - private spendable cannot cover action amount + reserve.
 
 2. Adapter executor mismatch
+
 - adapter `privacyExecutor()` differs from configured Emporium.
 
 3. Borrow token disabled
+
 - adapter `isBorrowTokenAllowed(BORROW_TOKEN)` is false.
 
 4. `Transfer Failed`
+
 - token routing/allowance mismatch in adapter path.
 
 ## 8. Agent Workflow Expectations
 
 1. Use WebCLI flows for end-to-end checks.
 2. Validate after changes:
+
 - `bun run typecheck`
 - `bun run build:web`
+
 3. Smoke scripts (`supply` / `borrow` / `repay`) are cleanup-by-default:
+
 - they return assets to deployer wallet unless `SMOKE_CLEANUP=false`.
 - preserve `SMOKE_WITHDRAW_SECRET_LABEL` if cleanup is disabled.
 - scripts are under `scripts/smoke-tests/`.
+
 4. Keep docs updated when behavior changes:
+
 - `README.md`
 - `AGENT.md`
 - `docs/hinkal-integration.md`

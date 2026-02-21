@@ -44,6 +44,7 @@ import type {
   LineType,
   SignerContext,
 } from './types';
+import { getStartedForJudgesCommand } from './commands/getStartedForJudgesCommand';
 
 const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
 
@@ -57,11 +58,11 @@ export class WebCliRuntime {
   private terminalEl: HTMLElement;
   private spinnerState:
     | {
-        lineEl: HTMLDivElement;
-        intervalId: number;
-        frameIndex: number;
-        label: string;
-      }
+      lineEl: HTMLDivElement;
+      intervalId: number;
+      frameIndex: number;
+      label: string;
+    }
     | null = null;
 
   constructor(terminalEl: HTMLElement) {
@@ -153,6 +154,7 @@ export class WebCliRuntime {
     this.printBanner();
     this.write(`Connected network: ${PRIVATE_NETWORK}`, 'ok');
     this.write('Hush Web CLI ready. Type `help` or `get-started` to get started', 'ok');
+    getStartedForJudgesCommand(this);
 
   }
 
